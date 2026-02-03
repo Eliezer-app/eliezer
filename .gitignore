@@ -1,8 +1,5 @@
-# credentials (contains secrets)
-mount/credentials.env
-
-# generated
-mount/seed.sh
-
-# logs
+credentials.env
+node_modules/
+mount/
 logs/
+.idea

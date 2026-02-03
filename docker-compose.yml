@@ -8,6 +8,8 @@ services:
     volumes:
       - ./mount:/opt/eliezer
       - ./logs:/var/log/eliezer
-    stdin_open: true
-    tty: true
-    command: /bin/bash
+      - node_modules:/opt/eliezer/node_modules
+    command: bash -c "npm ci && npx tsx eliezer.mts 2>&1"
+
+volumes:
+  node_modules:
