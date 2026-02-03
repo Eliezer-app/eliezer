@@ -1,0 +1,13 @@
+services:
+  eliezer:
+    build: .
+    image: eliezer:latest
+    container_name: eliezer
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./mount:/opt/eliezer
+      - ./logs:/var/log/eliezer
+    stdin_open: true
+    tty: true
+    command: /bin/bash
