@@ -65,11 +65,12 @@ describe('agent integration', () => {
 		expect(messages[1].role).toBe('user');
 		expect(messages[1].content).toContain('Hello agent');
 
-		// Text response should be auto-sent to chat
+		// Text response should be auto-sent to chat (filter out typing calls)
 		const chatCalls = await waitForCalls(MOCK_CHAT, 1);
-		expect(chatCalls[0].method).toBe('POST');
-		expect(chatCalls[0].url).toBe('/send');
-		expect(chatCalls[0].body.content).toBeDefined();
+		const sendCalls = chatCalls.filter((c: any) => c.url === '/send');
+		expect(sendCalls.length).toBeGreaterThanOrEqual(1);
+		expect(sendCalls[0].method).toBe('POST');
+		expect(sendCalls[0].body.content).toBeDefined();
 	}, 15_000);
 
 	it('tool loop: LLM calls tool → result fed back', async () => {
@@ -93,12 +94,13 @@ describe('agent integration', () => {
 
 		await postEvent('test', 'user_message', { content: 'Say hello' });
 
-		// Agent should call mock chat server
+		// Agent should call mock chat server (filter out typing calls)
 		const chatCalls = await waitForCalls(MOCK_CHAT, 1);
-		expect(chatCalls[0].method).toBe('POST');
-		expect(chatCalls[0].url).toBe('/send');
-		expect(chatCalls[0].body.content).toBe('Hello from agent');
-		expect(chatCalls[0].body.conversationId).toBe('default');
+		const sendCalls = chatCalls.filter((c: any) => c.url === '/send');
+		expect(sendCalls.length).toBeGreaterThanOrEqual(1);
+		expect(sendCalls[0].method).toBe('POST');
+		expect(sendCalls[0].body.content).toBe('Hello from agent');
+		expect(sendCalls[0].body.conversationId).toBe('default');
 	}, 15_000);
 
 	it('memory: second event includes context from first', async () => {

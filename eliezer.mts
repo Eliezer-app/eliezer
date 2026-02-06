@@ -75,6 +75,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 const HOUSEKEEPING_TYPES = new Set(['message_updated', 'typing']);
+const TOOL_OUTPUT_MAX_CHARS = 20_000;
+const TOOL_OUTPUT_PREVIEW_CHARS = 200;
 
 log.info('eliezer starting');
 
@@ -166,7 +168,13 @@ async function handleEvent(event: AgentEvent) {
 					continue;
 				}
 				log.info(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
-				const { content, isError, signal } = await tool.call(tu.input);
+				let { content, isError, signal } = await tool.call(tu.input);
+				if (content.length > TOOL_OUTPUT_MAX_CHARS) {
+					const preview = content.slice(0, TOOL_OUTPUT_PREVIEW_CHARS);
+					const size = content.length >= 1000 ? Math.round(content.length / 1000) + 'k' : String(content.length);
+					content = `Error: content too large: ${size} chars (limit: ${TOOL_OUTPUT_MAX_CHARS / 1000}k). Use more targeted commands.\n\nFirst ${TOOL_OUTPUT_PREVIEW_CHARS} chars:\n${preview}`;
+					isError = true;
+				}
 				log.info(`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
 				results.push({ type: 'tool_result', tool_use_id: tu.id, content });
 				if (signal === 'restart') { shouldBreak = true; break; }

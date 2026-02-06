@@ -17,7 +17,13 @@ function safe(fn: () => string): ToolResult {
 	catch (e: any) { return { content: e.message, isError: true }; }
 }
 
+function numberLines(text: string, offset: number): string {
+	return text.split('\n').map((line, i) => `${offset + i + 1}\t${line}`).join('\n');
+}
+
 export function createTools(): Tool[] {
+	const readFiles = new Set<string>();
+
 	return [
 		{
 			name: 'exec',
@@ -30,8 +36,33 @@ export function createTools(): Tool[] {
 			call: async ({ command }) => safe(() => execSync(command, { encoding: 'utf-8', timeout: 30_000 })),
 		},
 		{
+			name: 'read',
+			description: 'Read a file. Returns numbered lines for reference only (cat -n). Use offset/limit for large files.',
+			input_schema: {
+				type: 'object',
+				properties: {
+					path: { type: 'string', description: 'File path' },
+					offset: { type: 'number', description: 'Start line (1-based, default: 1)' },
+					limit: { type: 'number', description: 'Max lines to return (default: all)' },
+				},
+				required: ['path'],
+			},
+			call: async ({ path, offset, limit }) => safe(() => {
+				const content = readFileSync(path, 'utf-8');
+				const lines = content.split('\n');
+				const start = Math.max(0, (offset ?? 1) - 1);
+				const end = limit ? start + limit : lines.length;
+				const slice = lines.slice(start, end);
+				readFiles.add(path);
+				const result = numberLines(slice.join('\n'), start);
+				const total = lines.length;
+				const header = `[${path}: ${total} lines, showing ${start + 1}-${Math.min(end, total)}]`;
+				return `${header}\n${result}`;
+			}),
+		},
+		{
 			name: 'write',
-			description: 'Write content to a file',
+			description: 'Write content to a file (creates or overwrites)',
 			input_schema: {
 				type: 'object',
 				properties: {
@@ -40,17 +71,33 @@ export function createTools(): Tool[] {
 				},
 				required: ['path', 'content'],
 			},
-			call: async ({ path, content }) => safe(() => { writeFileSync(path, content); return 'ok'; }),
+			call: async ({ path, content }) => safe(() => { writeFileSync(path, content); readFiles.add(path); return 'ok'; }),
 		},
 		{
-			name: 'read',
-			description: 'Read the contents of a file',
+			name: 'edit',
+			description: 'Edit a file by replacing a unique string. You must read the file first. Match against raw file content (not the line numbers from read output).',
 			input_schema: {
 				type: 'object',
-				properties: { path: { type: 'string', description: 'File path' } },
-				required: ['path'],
+				properties: {
+					path: { type: 'string', description: 'File path' },
+					old_string: { type: 'string', description: 'Exact string to find (must be unique in the file)' },
+					new_string: { type: 'string', description: 'Replacement string' },
+				},
+				required: ['path', 'old_string', 'new_string'],
 			},
-			call: async ({ path }) => safe(() => readFileSync(path, 'utf-8')),
+			call: async ({ path, old_string, new_string }) => {
+				if (!readFiles.has(path)) {
+					return { content: `Error: must read ${path} before editing`, isError: true };
+				}
+				return safe(() => {
+					const content = readFileSync(path, 'utf-8');
+					const count = content.split(old_string).length - 1;
+					if (count === 0) return `Error: old_string not found in ${path}`;
+					if (count > 1) return `Error: old_string matches ${count} times in ${path}. Provide more context to make it unique.`;
+					writeFileSync(path, content.replace(old_string, new_string));
+					return 'ok';
+				});
+			},
 		},
 		{
 			name: 'restart_self',
