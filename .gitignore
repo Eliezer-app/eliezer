@@ -2,4 +2,5 @@ credentials.env
 node_modules/
 mount/
 logs/
+state/
 .idea
