@@ -1,4 +1,5 @@
 .env
+.env.old
 node_modules/
 mount/
 logs/

@@ -68,7 +68,7 @@ describe('agent integration', () => {
 		// Text response should be auto-sent to chat
 		const chatCalls = await waitForCalls(MOCK_CHAT, 1);
 		expect(chatCalls[0].method).toBe('POST');
-		expect(chatCalls[0].url).toBe('/api/agent/send');
+		expect(chatCalls[0].url).toBe('/send');
 		expect(chatCalls[0].body.content).toBeDefined();
 	}, 15_000);
 
@@ -96,7 +96,7 @@ describe('agent integration', () => {
 		// Agent should call mock chat server
 		const chatCalls = await waitForCalls(MOCK_CHAT, 1);
 		expect(chatCalls[0].method).toBe('POST');
-		expect(chatCalls[0].url).toBe('/api/agent/send');
+		expect(chatCalls[0].url).toBe('/send');
 		expect(chatCalls[0].body.content).toBe('Hello from agent');
 		expect(chatCalls[0].body.conversationId).toBe('default');
 	}, 15_000);

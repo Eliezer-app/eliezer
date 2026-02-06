@@ -1,7 +1,8 @@
 export type ContentBlock =
 	| { type: 'text'; text: string }
 	| { type: 'tool_use'; id: string; name: string; input: Record<string, any> }
-	| { type: 'tool_result'; tool_use_id: string; content: string };
+	| { type: 'tool_result'; tool_use_id: string; content: string }
+	| { type: 'reasoning'; content: string };
 
 export interface Message {
 	role: 'user' | 'assistant';
@@ -57,18 +58,24 @@ export class AnthropicLLM extends LLMBase {
 		};
 		if (tools.length) body.tools = tools;
 
-		const res = await fetch(`${this.baseUrl}/v1/messages`, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				'x-api-key': this.apiKey,
-				'anthropic-version': '2023-06-01',
-			},
-			body: JSON.stringify(body),
-		});
+		const url = `${this.baseUrl}/v1/messages`;
+		let res: Response;
+		try {
+			res = await fetch(url, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'x-api-key': this.apiKey,
+					'anthropic-version': '2023-06-01',
+				},
+				body: JSON.stringify(body),
+			});
+		} catch (e: any) {
+			throw new Error(`LLM unreachable at ${url}: ${e.message}`);
+		}
 
 		const data = await res.json() as any;
-		if (data.error) throw new Error(data.error.message);
+		if (!res.ok || data.error) throw new Error(`LLM error (${res.status}): ${data.error?.message ?? JSON.stringify(data)}`);
 		this.addTokens(data.usage?.input_tokens ?? 0, data.usage?.output_tokens ?? 0);
 		return { content: data.content ?? [], stop_reason: data.stop_reason };
 	}
@@ -98,14 +105,20 @@ export class OpenAILLM extends LLMBase {
 			}));
 		}
 
-		const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
-			body: JSON.stringify(body),
-		});
+		const url = `${this.baseUrl}/v1/chat/completions`;
+		let res: Response;
+		try {
+			res = await fetch(url, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
+				body: JSON.stringify(body),
+			});
+		} catch (e: any) {
+			throw new Error(`LLM unreachable at ${url}: ${e.message}`);
+		}
 
 		const data = await res.json() as any;
-		if (data.error) throw new Error(data.error.message);
+		if (!res.ok || data.error) throw new Error(`LLM error (${res.status}): ${data.error?.message ?? JSON.stringify(data)}`);
 		this.addTokens(data.usage?.prompt_tokens ?? 0, data.usage?.completion_tokens ?? 0);
 		return this.responseFromOpenAI(data.choices[0]);
 	}
@@ -132,7 +145,9 @@ export class OpenAILLM extends LLMBase {
 					const tu = b as Extract<ContentBlock, { type: 'tool_use' }>;
 					return { id: tu.id, type: 'function', function: { name: tu.name, arguments: JSON.stringify(tu.input) } };
 				});
+				const reasoning = msg.content.filter(b => b.type === 'reasoning').map(b => (b as any).content).join('');
 				const oai: any = { role: 'assistant' };
+				if (reasoning) oai.reasoning_content = reasoning;
 				if (texts.length) oai.content = texts.join('\n');
 				if (calls.length) oai.tool_calls = calls;
 				out.push(oai);
@@ -145,6 +160,7 @@ export class OpenAILLM extends LLMBase {
 	private responseFromOpenAI(choice: any): LLMResponse {
 		const content: ContentBlock[] = [];
 		const msg = choice.message;
+		if (msg.reasoning_content) content.push({ type: 'reasoning', content: msg.reasoning_content });
 		if (msg.content) content.push({ type: 'text', text: msg.content });
 		if (msg.tool_calls) {
 			for (const tc of msg.tool_calls) {

@@ -1,6 +1,6 @@
 .PHONY: dev dev-down shell logs stop clean test test-up test-down
 
-dev:
+dev: test-down dev-down
 	docker compose up -d
 
 dev-down:
@@ -25,5 +25,5 @@ test-up:
 test-down:
 	docker compose -f docker-compose.test.yml down
 
-test: test-up
+test: dev-down test-up
 	@npm test; ret=$$?; $(MAKE) test-down; exit $$ret

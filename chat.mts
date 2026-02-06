@@ -8,15 +8,19 @@ export class ChatClient {
 	}
 
 	async send(conversationId: string, content: string): Promise<any> {
-		return this.request('POST', '/api/agent/send', { conversationId, content });
+		return this.request('POST', '/send', { conversationId, content });
 	}
 
 	async updateMessage(messageId: string, content: string): Promise<any> {
-		return this.request('PATCH', `/api/agent/messages/${messageId}`, { content });
+		return this.request('PATCH', `/messages/${messageId}`, { content });
 	}
 
 	async deleteMessage(messageId: string): Promise<any> {
-		return this.request('DELETE', `/api/agent/messages/${messageId}`);
+		return this.request('DELETE', `/messages/${messageId}`);
+	}
+
+	async typing(active: boolean): Promise<any> {
+		return this.request('POST', '/typing', { active });
 	}
 
 	private async request(method: string, path: string, body?: unknown): Promise<any> {

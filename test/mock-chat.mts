@@ -23,7 +23,7 @@ const server = createServer((req, res) => {
 		return;
 	}
 
-	if (req.url?.startsWith('/api/agent/')) {
+	if (req.url === '/send' || req.url?.startsWith('/messages/')) {
 		let body = '';
 		req.on('data', (chunk: string) => body += chunk);
 		req.on('end', () => {

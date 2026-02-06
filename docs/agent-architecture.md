@@ -95,6 +95,23 @@ Both normalize to internal `ContentBlock`/`Message` types. Token usage tracked v
 | `chat` | Send/update/delete messages via chat server API |
 | `restart_self` | Signal the loop to break (self-restart) |
 
+## Chat Server API (`CHAT_URL`)
+
+Endpoints the agent calls on the chat server:
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| POST | `/send` | Send a message (auto-called for LLM text output) |
+| PATCH | `/messages/:id` | Update a message |
+| DELETE | `/messages/:id` | Delete a message |
+| POST | `/typing` | Show/hide typing indicator |
+| POST | `/upload` | Send message with file attachment |
+| POST | `/scroll` | Scroll to a specific message |
+| GET | `/messages` | List messages (optional `?search=`) |
+| GET | `/health` | Health check |
+
+LLM text responses are auto-sent via `POST /send`. The chat tool exposes send/update/delete to the LLM, but send is rarely needed directly.
+
 ## Prompts
 
 Three files in `PROMPTS_DIR`, read fresh on each LLM call:

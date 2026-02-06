@@ -74,6 +74,8 @@ function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+const HOUSEKEEPING_TYPES = new Set(['message_updated', 'typing']);
+
 log.info('eliezer starting');
 
 while (true) {
@@ -88,10 +90,27 @@ while (true) {
 		continue;
 	}
 
+	if (event.type === 'message_deleted') {
+		const payload = event.payload as any;
+		const deleted = memory.deleteByChatMessageId(payload.messageId);
+		log.info('message deleted from memory', { messageId: payload.messageId, deleted });
+		queue.done(event.id);
+		continue;
+	}
+
+	if (HOUSEKEEPING_TYPES.has(event.type)) {
+		log.info('skipping housekeeping event', { source: event.source, type: event.type });
+		queue.done(event.id);
+		continue;
+	}
+
 	try {
 		await handleEvent(event);
 	} catch (e: any) {
 		log.error('event failed', { source: event.source, type: event.type, error: e.message });
+		try { await chat.send('default', `Error: ${e.message}`); } catch (ce: any) {
+			log.error('chat send failed', { error: ce.message });
+		}
 	}
 	queue.done(event.id);
 }
@@ -99,43 +118,69 @@ while (true) {
 async function handleEvent(event: AgentEvent) {
 	log.info('handling event', { source: event.source, type: event.type });
 
-	memory.add('user', `Event: ${event.source}:${event.type}\n${JSON.stringify(event.payload)}`);
+	const payload = event.payload as any;
+	const chatMessageId = payload?.messageId;
+	memory.add('user', `Event: ${event.source}:${event.type}\n${JSON.stringify(event.payload)}`, chatMessageId);
 
-	while (true) {
-		const response = await llm.call(memory.getContext(), getSystem(), toolDefs);
+	// Show typing indicator while processing
+	await chat.typing(true);
 
-		for (const block of response.content) {
-			if (block.type === 'text') log.info('llm', { text: block.text });
-		}
-		memory.add('assistant', response.content);
+	try {
+		while (true) {
+			const response = await llm.call(memory.getContext(), getSystem(), toolDefs);
 
-		const toolUses = response.content.filter(b => b.type === 'tool_use') as
-			Array<Extract<ContentBlock, { type: 'tool_use' }>>;
-		if (!toolUses.length) {
-			const text = response.content
-				.filter(b => b.type === 'text')
-				.map(b => (b as Extract<ContentBlock, { type: 'text' }>).text)
-				.join('\n');
-			if (text) await chat.send('default', text);
-			break;
-		}
-
-		const results: ContentBlock[] = [];
-		let shouldBreak = false;
-
-		for (const tu of toolUses) {
-			const tool = tools.find(t => t.name === tu.name);
-			if (!tool) {
-				results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool: ${tu.name}` });
-				continue;
+			// Keep text, tool_use, and reasoning blocks. Reasoning is needed for providers
+			// that require it on history replay (e.g. Kimi). Not sent to chat.
+			const content = response.content.filter(b => b.type === 'text' || b.type === 'tool_use' || b.type === 'reasoning');
+			for (const block of content) {
+				if (block.type === 'text') log.info('llm', { text: block.text });
 			}
-			const { content, isError, signal } = await tool.call(tu.input);
-			log.info(`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
-			results.push({ type: 'tool_result', tool_use_id: tu.id, content });
-			if (signal === 'restart') { shouldBreak = true; break; }
-		}
+			const toolUses = response.content.filter(b => b.type === 'tool_use') as
+				Array<Extract<ContentBlock, { type: 'tool_use' }>>;
+			if (!toolUses.length) {
+				// Turn off typing before sending final response
+				await chat.typing(false);
+				
+				const text = response.content
+					.filter(b => b.type === 'text')
+					.map(b => (b as Extract<ContentBlock, { type: 'text' }>).text)
+					.join('\n');
+				let sentMessageId: string | undefined;
+				if (text) {
+					const res = await chat.send('default', text);
+					sentMessageId = res?.messageId;
+				}
+				memory.add('assistant', content, sentMessageId);
+				break;
+			}
 
-		memory.add('user', results);
-		if (shouldBreak) break;
+			memory.add('assistant', content);
+
+			const results: ContentBlock[] = [];
+			let shouldBreak = false;
+
+			for (const tu of toolUses) {
+				const tool = tools.find(t => t.name === tu.name);
+				if (!tool) {
+					results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool: ${tu.name}` });
+					continue;
+				}
+				log.info(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
+				const { content, isError, signal } = await tool.call(tu.input);
+				log.info(`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
+				results.push({ type: 'tool_result', tool_use_id: tu.id, content });
+				if (signal === 'restart') { shouldBreak = true; break; }
+			}
+
+			memory.add('user', results);
+			if (shouldBreak) {
+				await chat.typing(false);
+				break;
+			}
+		}
+	} catch (e) {
+		// Ensure typing is turned off on error
+		await chat.typing(false).catch(() => {});
+		throw e;
 	}
 }
