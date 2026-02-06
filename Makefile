@@ -1,4 +1,4 @@
-.PHONY: dev dev-down shell logs stop clean test test-up test-down
+.PHONY: dev dev-down shell logs stop clean test test-up test-down export export-html
 
 dev: test-down dev-down
 	docker compose up -d
@@ -27,3 +27,9 @@ test-down:
 
 test: dev-down test-up
 	@npm test; ret=$$?; $(MAKE) test-down; exit $$ret
+
+export:
+	@npx tsx export-chat.mts
+
+export-html:
+	@npx tsx export-chat-html.mts

@@ -4,4 +4,6 @@ node_modules/
 mount/
 logs/
 state/
+export/
+.DS_Store
 .idea
