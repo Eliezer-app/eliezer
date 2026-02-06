@@ -1,346 +1,141 @@
-import { execSync } from 'child_process';
-import { writeFileSync, readFileSync, appendFileSync, mkdirSync } from 'fs';
-import Database from 'better-sqlite3';
 import { config } from 'dotenv';
+import { mkdirSync, readFileSync } from 'fs';
+import Database from 'better-sqlite3';
+import { Logger } from './log.mts';
+import { LLMBase, AnthropicLLM, OpenAILLM, ContentBlock } from './llm.mts';
+import { EventQueue, AgentEvent } from './queue.mts';
+import { Memory } from './memory.mts';
+import { startServer } from './server.mts';
+import { createTools } from './tools.mts';
+import { ChatClient, createChatTool } from './chat.mts';
 
-config({ path: '/opt/eliezer/credentials.env' });
+config();
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
-
-interface Task {
-	id?: number;
-	type: string;
-	payload?: string;
+function requireEnv(name: string): string {
+	const val = process.env[name];
+	if (!val) { console.error(`Missing required env var: ${name}`); process.exit(1); }
+	return val;
 }
 
-class ThinkTask implements Task {
-	type = 'think';
+const LLM_PROVIDER = requireEnv('LLM_PROVIDER');
+const LLM_API_KEY = requireEnv('LLM_API_KEY');
+const LLM_BASE_URL = requireEnv('LLM_BASE_URL');
+const LLM_MODEL = requireEnv('LLM_MODEL');
+const AGENT_PORT = requireEnv('AGENT_PORT');
+const DB_PATH = requireEnv('DB_PATH');
+const CHAT_URL = requireEnv('CHAT_URL');
+const PROMPTS_DIR = requireEnv('PROMPTS_DIR');
+const HEARTBEAT_MS = Number(requireEnv('HEARTBEAT_MS').replace(/_/g, ''));
+
+const log = new Logger();
+
+// DB
+mkdirSync(DB_PATH.replace(/\/[^/]+$/, ''), { recursive: true });
+const db = new Database(DB_PATH);
+
+// Components
+const queue = new EventQueue(db);
+const memory = new Memory(db);
+const llm: LLMBase = LLM_PROVIDER === 'anthropic'
+	? new AnthropicLLM({ apiKey: LLM_API_KEY, model: LLM_MODEL, baseUrl: LLM_BASE_URL })
+	: new OpenAILLM({ apiKey: LLM_API_KEY, model: LLM_MODEL, baseUrl: LLM_BASE_URL });
+const chat = new ChatClient(CHAT_URL);
+const tools = [...createTools(), createChatTool(chat)];
+const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
+
+function readPrompt(name: string): string {
+	try { return readFileSync(`${PROMPTS_DIR}/${name}`, 'utf-8').trim(); }
+	catch { return ''; }
 }
 
-type ContentBlock =
-	| { type: 'text'; text: string }
-	| { type: 'tool_use'; id: string; name: string; input: Record<string, any> }
-	| { type: 'tool_result'; tool_use_id: string; content: string };
-
-interface Message {
-	role: 'user' | 'assistant';
-	content: string | ContentBlock[];
+function getSystem(): string {
+	const parts = [readPrompt('system.md'), readPrompt('user.md')];
+	const mem = readPrompt('memory.md');
+	if (mem) parts.push(`# Memory\n${mem}`);
+	return parts.filter(Boolean).join('\n\n');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// INFRASTRUCTURE
-// ═══════════════════════════════════════════════════════════════════════════════
+// HTTP server
+const startTime = Date.now();
+startServer(
+	parseInt(AGENT_PORT),
+	queue,
+	() => ({
+		status: 'ok',
+		uptime: Math.floor((Date.now() - startTime) / 1000),
+		queueDepth: queue.depth(),
+		tokensUsed: llm.tokensUsed,
+	}),
+	log.with({ module: 'Server' }),
+);
 
-class Memory {
-	private db: Database.Database;
-	private contextLimit = 100;
-
-	constructor(db: Database.Database) {
-		this.db = db;
-		db.exec(`
-			CREATE TABLE IF NOT EXISTS messages (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				role TEXT NOT NULL,
-				content TEXT NOT NULL,
-				created_at INTEGER DEFAULT (unixepoch())
-			);
-		`);
-	}
-
-	add(role: string, content: string | ContentBlock[]): void {
-		// Skip empty content
-		if (typeof content === 'string' && content.length === 0) return;
-		if (Array.isArray(content) && content.length === 0) return;
-		const serialized = typeof content === 'string' ? content : JSON.stringify(content);
-		this.db.prepare('INSERT INTO messages (role, content) VALUES (?, ?)')
-			.run(role, serialized);
-		this.maybeCompact();
-	}
-
-	getContext(): Message[] {
-		const rows = this.db.prepare(`
-			SELECT role, content FROM messages
-			ORDER BY id DESC LIMIT ?
-		`).all(this.contextLimit) as Array<{ role: string; content: string }>;
-
-		return rows.reverse().map(r => {
-			let content: string | ContentBlock[];
-			try {
-				const parsed = JSON.parse(r.content);
-				content = Array.isArray(parsed) ? parsed : r.content;
-			} catch {
-				content = r.content;
-			}
-			return { role: r.role as 'user' | 'assistant', content };
-		}).filter(m => {
-			// Filter out empty content
-			if (typeof m.content === 'string') return m.content.length > 0;
-			if (Array.isArray(m.content)) return m.content.length > 0;
-			return true;
-		});
-	}
-
-	private maybeCompact(): void {
-		// TODO: implement LLM-based compaction when context grows too large
-	}
-}
-
-class Queue {
-	private db: Database.Database;
-
-	constructor(db: Database.Database) {
-		this.db = db;
-		this.db.exec(`
-			CREATE TABLE IF NOT EXISTS queue (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				type TEXT NOT NULL,
-				payload TEXT DEFAULT '{}',
-				created_at INTEGER DEFAULT (unixepoch())
-			);
-		`);
-	}
-
-	push(type: string, payload: object = {}) {
-		this.db.prepare('INSERT INTO queue (type, payload) VALUES (?, ?)')
-			.run(type, JSON.stringify(payload));
-	}
-
-	pop(): Task | null {
-		return this.db.prepare('SELECT * FROM queue ORDER BY id LIMIT 1').get() as Task | null;
-	}
-
-	done(id: number) {
-		this.db.prepare('DELETE FROM queue WHERE id = ?').run(id);
-	}
-}
-
-const TOOLS = [
-	{
-		name: 'exec',
-		description: 'Run a shell command and return the output',
-		input_schema: {
-			type: 'object',
-			properties: {
-				command: { type: 'string', description: 'The shell command to execute' }
-			},
-			required: ['command']
-		}
-	},
-	{
-		name: 'write',
-		description: 'Write content to a file',
-		input_schema: {
-			type: 'object',
-			properties: {
-				path: { type: 'string', description: 'The file path to write to' },
-				content: { type: 'string', description: 'The content to write' }
-			},
-			required: ['path', 'content']
-		}
-	},
-	{
-		name: 'read',
-		description: 'Read the contents of a file',
-		input_schema: {
-			type: 'object',
-			properties: {
-				path: { type: 'string', description: 'The file path to read' }
-			},
-			required: ['path']
-		}
-	},
-	{
-		name: 'wait',
-		description: 'Pause autonomous thinking and wait for external tasks from the queue',
-		input_schema: {
-			type: 'object',
-			properties: {}
-		}
-	},
-	{
-		name: 'exit',
-		description: 'Terminate the process',
-		input_schema: {
-			type: 'object',
-			properties: {}
-		}
-	}
-];
-
-class LLM {
-	private apiKey = process.env.ANTHROPIC_API_KEY!;
-	private model = process.env.MODEL || 'claude-sonnet-4-5-20250514';
-
-	async call(messages: Message[], system: string): Promise<{ content: ContentBlock[]; stop_reason: string }> {
-		const response = await fetch('https://api.anthropic.com/v1/messages', {
-			method: 'POST',
-			headers: {
-				'x-api-key': this.apiKey,
-				'content-type': 'application/json',
-				'anthropic-version': '2023-06-01',
-			},
-			body: JSON.stringify({
-				model: this.model,
-				max_tokens: 4096,
-				system,
-				tools: TOOLS,
-				messages,
-			}),
-		});
-
-		const data = await response.json();
-		if (data.error) {
-			throw new Error(data.error.message);
-		}
-		budget.add(data.usage?.input_tokens || 0, data.usage?.output_tokens || 0);
-		return { content: data.content || [], stop_reason: data.stop_reason };
-	}
-}
-
-class Log {
-	constructor(private path: string) {}
-
-	info(msg: string) {
-		const line = JSON.stringify({ ts: new Date().toISOString(), msg }) + '\n';
-		appendFileSync(this.path, line);
-		process.stdout.write(`${msg}\n`);
-	}
-
-	tool(name: string, input: Record<string, any>, result: string, isError: boolean) {
-		const arg = input.command || input.path || '';
-		const short = arg.length > 60 ? arg.slice(0, 57) + '...' : arg;
-		const status = isError ? `err` : `ok`;
-		const line = JSON.stringify({ ts: new Date().toISOString(), tool: name, input, result, isError }) + '\n';
-		appendFileSync(this.path, line);
-		process.stdout.write(`  [${name}] ${short} → ${status}\n`);
-	}
-
-	text(text: string) {
-		const short = text.length > 100 ? text.slice(0, 97) + '...' : text;
-		process.stdout.write(`  ${short}\n`);
-	}
-}
-
-const budget = {
-	used: 0,
-	limit: 500_000,
-	add(input: number, output: number) { this.used += input + output; },
-	hasRemaining() { return this.used < this.limit; },
-};
-
+// Main loop
 function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// THE LOOP
-// ═══════════════════════════════════════════════════════════════════════════════
+log.info('eliezer starting');
 
-mkdirSync('/opt/eliezer/state', { recursive: true });
-mkdirSync('/var/log/eliezer', { recursive: true });
-const db = new Database('/opt/eliezer/state/eliezer.db');
-const queue = new Queue(db);
-const memory = new Memory(db);
-const llm = new LLM();
-const log = new Log('/var/log/eliezer/eliezer.log');
+while (true) {
+	const popPromise = queue.pop();
+	const event = await Promise.race([
+		popPromise,
+		sleep(HEARTBEAT_MS).then(() => undefined),
+	]);
 
-let running = true;
-let waiting = false;
-
-function executeTool(name: string, input: Record<string, any>): { result: string; isError: boolean } {
-	try {
-		switch (name) {
-			case 'exec':
-				return { result: execSync(input.command, { encoding: 'utf-8', timeout: 30_000 }), isError: false };
-			case 'write':
-				writeFileSync(input.path, input.content);
-				return { result: 'ok', isError: false };
-			case 'read':
-				return { result: readFileSync(input.path, 'utf-8'), isError: false };
-			case 'wait':
-				waiting = true;
-				log.info('◦ waiting');
-				return { result: 'ok', isError: false };
-			case 'exit':
-				running = false;
-				return { result: 'ok', isError: false };
-			default:
-				return { result: `Unknown tool: ${name}`, isError: true };
-		}
-	} catch (e: any) {
-		return { result: e.message, isError: true };
+	if (!event) {
+		queue.cancelWait();
+		continue;
 	}
+
+	try {
+		await handleEvent(event);
+	} catch (e: any) {
+		log.error('event failed', { source: event.source, type: event.type, error: e.message });
+	}
+	queue.done(event.id);
 }
 
-function getSystem(): string {
-	const base = readFileSync('/opt/eliezer/prompt.txt', 'utf-8');
-	return `${base}
+async function handleEvent(event: AgentEvent) {
+	log.info('handling event', { source: event.source, type: event.type });
 
-STATE: ${budget.used}/${budget.limit} tokens used`;
-}
+	memory.add('user', `Event: ${event.source}:${event.type}\n${JSON.stringify(event.payload)}`);
 
-async function handle(task: Task) {
-	log.info(task.type === 'think' ? '● think' : `● task: ${task.type}`);
-
-	const userMessage = task.type === 'think'
-		? 'Continue your work. What should you do next?'
-		: `Task: ${task.type}\n${task.payload || ''}`;
-
-	memory.add('user', userMessage);
-
-	// Agentic loop: keep going while model wants to use tools
 	while (true) {
-		const context = memory.getContext();
-		const response = await llm.call(context, getSystem());
+		const response = await llm.call(memory.getContext(), getSystem(), toolDefs);
 
-		// Log and store assistant response
 		for (const block of response.content) {
-			if (block.type === 'text') {
-				log.text(block.text);
-			}
+			if (block.type === 'text') log.info('llm', { text: block.text });
 		}
 		memory.add('assistant', response.content);
 
-		// Check for tool use
-		const toolUses = response.content.filter(b => b.type === 'tool_use') as Array<{ type: 'tool_use'; id: string; name: string; input: Record<string, any> }>;
-
-		if (toolUses.length === 0) {
-			// No tools called, done with this turn
+		const toolUses = response.content.filter(b => b.type === 'tool_use') as
+			Array<Extract<ContentBlock, { type: 'tool_use' }>>;
+		if (!toolUses.length) {
+			const text = response.content
+				.filter(b => b.type === 'text')
+				.map(b => (b as Extract<ContentBlock, { type: 'text' }>).text)
+				.join('\n');
+			if (text) await chat.send('default', text);
 			break;
 		}
 
-		// Execute tools and collect results
-		const toolResults: ContentBlock[] = [];
-		for (const toolUse of toolUses) {
-			const { result, isError } = executeTool(toolUse.name, toolUse.input);
-			log.tool(toolUse.name, toolUse.input, result, isError);
-			toolResults.push({
-				type: 'tool_result',
-				tool_use_id: toolUse.id,
-				content: result
-			});
+		const results: ContentBlock[] = [];
+		let shouldBreak = false;
+
+		for (const tu of toolUses) {
+			const tool = tools.find(t => t.name === tu.name);
+			if (!tool) {
+				results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool: ${tu.name}` });
+				continue;
+			}
+			const { content, isError, signal } = await tool.call(tu.input);
+			log.info(`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
+			results.push({ type: 'tool_result', tool_use_id: tu.id, content });
+			if (signal === 'restart') { shouldBreak = true; break; }
 		}
 
-		// Add tool results as user message and continue loop
-		memory.add('user', toolResults);
+		memory.add('user', results);
+		if (shouldBreak) break;
 	}
 }
-
-log.info('▶ eliezer starting');
-
-while (running) {
-	const task = queue.pop();
-
-	if (task) {
-		await handle(task);
-		queue.done(task.id!);
-	} else if (!waiting && budget.hasRemaining()) {
-		await handle(new ThinkTask());
-	} else {
-		await sleep(1_000);
-	}
-}
-
-log.info('■ eliezer exiting');

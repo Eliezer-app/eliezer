@@ -15,7 +15,7 @@ queue.mts      — EventQueue, AgentEvent
 memory.mts     — Memory
 llm.mts        — LLMBase, AnthropicLLM, OpenAILLM, ContentBlock, Message
 tools.mts      — ToolBase, ToolResult, ExecTool, WriteTool, ReadTool, RestartSelfTool
-chat.mts       — ChatClient, ChatTool
+chat.mts       — ChatClient, ChatTool (send is atypical; text auto-routed to chat)
 server.mts     — startServer()
 log.mts        — Logger
 prompts/       — system.md, user.md, memory.md (shared with chat server)
@@ -39,7 +39,7 @@ eliezer.mts
   ├── memory.mts    → llm.mts (ContentBlock, Message types)
   ├── llm.mts       → log.mts
   ├── tools.mts     → log.mts
-  ├── chat.mts      → tools.mts (extends ToolBase)
+  ├── chat.mts      → tools.mts (ChatTool extends Tool)
   └── log.mts       → (standalone)
 ```
 
@@ -71,9 +71,11 @@ Concrete tools: `ExecTool`, `WriteTool`, `ReadTool`, `RestartSelfTool`.
 `RestartSelfTool` returns a signal via `ToolResult.signal` — the caller handles it.
 
 ### `chat.mts`
-`ChatClient`: HTTP client to clawchat at `:3100`. Methods: `send()`, `updateMessage()`, `deleteMessage()`, `updateAppState()`.
+`ChatClient`: HTTP client to clawchat at `:3100`. Methods: `send()`, `updateMessage()`, `deleteMessage()`.
 
-`ChatTool extends ToolBase`: takes `ChatClient`, wraps it as a tool the LLM can invoke.
+`ChatTool`: wraps ChatClient as a tool (send/update/delete). The `send` action exists but is atypical — normal text responses (non-tool-call) are automatically routed to chat by `handleEvent`. The tool's `send` is for edge cases only.
+
+`handleEvent` collects text blocks from the LLM's final response and sends them to chat via `ChatClient.send()`.
 
 ### `server.mts`
 `startServer(port, queue, getHealth)`: HTTP server with `POST /events` and `GET /health`.
@@ -145,7 +147,7 @@ LOG_LEVELS=
 
 1. `npm run dev` → agent starts, HTTP on :3200
 2. `curl localhost:3200/health` → status JSON
-3. POST event to :3200/events → agent wakes, calls LLM, uses `chat` tool to respond via :3100
+3. POST event to :3200/events → agent wakes, calls LLM, text response auto-sent to chat via :3100
 4. Full integration: clawchat + eliezer, end-to-end message flow
 
 ## Tasks
@@ -171,9 +173,10 @@ LOG_LEVELS=
 - [ ] Verify: mock LLM returns tool_use → agent executes → result fed back to LLM
 
 ### Phase 5 — Chat integration
-- [ ] `chat.mts` — ChatClient, ChatTool
-- [ ] Wire ChatTool into tools array
-- [ ] Verify: mock LLM returns chat tool_use → agent calls chat server API
+- [x] `chat.mts` — ChatClient + ChatTool (send/update/delete)
+- [x] LLM text output auto-sent to chat server via `ChatClient.send()` at end of agentic loop
+- [x] ChatTool `send` kept as atypical alternative for edge cases
+- [x] Verify: post event → LLM responds with text → text auto-sent to chat server
 
 ### Phase 6 — Memory & prompts
 - [ ] `memory.mts` — extract Memory class, wire into loop

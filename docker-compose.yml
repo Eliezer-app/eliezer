@@ -1,15 +1,29 @@
+name: eliezer
+
 services:
-  eliezer:
-    build: .
-    image: eliezer:latest
-    container_name: eliezer
-    ports:
-      - "8888:8888"
+  init:
+    image: node:22-slim
+    working_dir: /app
     volumes:
-      - ./mount:/opt/eliezer
-      - ./logs:/var/log/eliezer
-      - node_modules:/opt/eliezer/node_modules
-    command: bash -c "npm ci && npx tsx eliezer.mts 2>&1"
+      - .:/app
+      - node_modules:/app/node_modules
+    command: npm ci
+
+  eliezer:
+    image: node:22-slim
+    container_name: eliezer
+    working_dir: /app
+    ports:
+      - "3200:3200"
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+    command: npx tsx eliezer.mts
+    env_file:
+      - .env
+    depends_on:
+      init:
+        condition: service_completed_successfully
 
 volumes:
   node_modules:

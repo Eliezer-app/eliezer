@@ -1,0 +1,77 @@
+name: eliezer-test
+
+services:
+  init:
+    image: node:22-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+      - node_modules_test:/app/node_modules
+    command: npm ci
+
+  mock-llm:
+    image: node:22-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+      - node_modules_test:/app/node_modules
+    command: npx tsx test/mock-llm.mts
+    ports:
+      - "9999:9999"
+    environment:
+      MOCK_LLM_PORT: 9999
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:9999/health').then(r=>{if(!r.ok)throw 1})"]
+      interval: 2s
+      retries: 5
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  mock-chat:
+    image: node:22-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+      - node_modules_test:/app/node_modules
+    command: npx tsx test/mock-chat.mts
+    ports:
+      - "4100:4100"
+    environment:
+      MOCK_CHAT_PORT: 4100
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4100/health').then(r=>{if(!r.ok)throw 1})"]
+      interval: 2s
+      retries: 5
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  agent:
+    image: node:22-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+      - node_modules_test:/app/node_modules
+    command: npx tsx eliezer.mts
+    ports:
+      - "3200:3200"
+    environment:
+      LLM_PROVIDER: openai
+      LLM_BASE_URL: http://mock-llm:9999
+      LLM_API_KEY: test
+      LLM_MODEL: mock
+      AGENT_PORT: 3200
+      DB_PATH: /tmp/eliezer-test.db
+      CHAT_URL: http://mock-chat:4100
+      PROMPTS_DIR: ./prompts
+      HEARTBEAT_MS: 1000
+      LOG_LEVEL: debug
+    depends_on:
+      mock-llm:
+        condition: service_healthy
+      mock-chat:
+        condition: service_healthy
+
+volumes:
+  node_modules_test:

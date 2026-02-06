@@ -1,13 +1,10 @@
-.PHONY: build run shell logs status stop clean purge
+.PHONY: dev dev-down shell logs stop clean test test-up test-down
 
-build:
-	docker compose build
+dev:
+	docker compose up -d
 
-run: build
-	@mkdir -p mount/state logs
-	@rm -rf mount/node_modules
-	@cp eliezer.mts prompt.txt credentials.env package.json package-lock.json mount/
-	docker compose up --attach eliezer
+dev-down:
+	docker compose down
 
 shell:
 	docker compose exec eliezer /bin/bash
@@ -15,15 +12,18 @@ shell:
 logs:
 	docker compose logs -f
 
-status:
-	docker compose exec eliezer ps aux
-
 stop:
 	docker compose down
 
 clean:
-	docker compose down 2>/dev/null || true
-	rm -rf mount logs
-
-purge: clean
 	docker compose down -v 2>/dev/null || true
+	docker compose -f docker-compose.test.yml down -v 2>/dev/null || true
+
+test-up:
+	docker compose -f docker-compose.test.yml up -d
+
+test-down:
+	docker compose -f docker-compose.test.yml down
+
+test: test-up
+	@npm test; ret=$$?; $(MAKE) test-down; exit $$ret
