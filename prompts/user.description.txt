@@ -1,0 +1,1 @@
+User-specific context. Who the user is and how responses are delivered.

@@ -2,11 +2,13 @@ import { execSync } from 'child_process';
 import { readFileSync, writeFileSync } from 'fs';
 import Database from 'better-sqlite3';
 import { ToolDef } from './llm.mts';
+import { CronManager } from './cron.mts';
 
 export interface ToolResult {
 	content: string;
 	isError: boolean;
 	signal?: 'restart';
+	skipSecretRedaction?: boolean;
 }
 
 export interface Tool extends ToolDef {
@@ -141,6 +143,45 @@ export function createSearchHistoryTool(db: Database.Database): Tool {
 			}).join('\n\n');
 
 			return { content: `${rows.length} result(s):\n\n${results}`, isError: false };
+		},
+	};
+}
+
+export function createScheduleTool(cronManager: CronManager): Tool {
+	return {
+		name: 'schedule',
+		description: 'Schedule recurring prompts via cron. No action field = create or update (prompt and cron required; same name overwrites). Actions: pause, resume, delete.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				name: { type: 'string', description: 'Unique name for the cron job' },
+				prompt: { type: 'string', description: 'Prompt sent to you when the cron fires (required for create)' },
+				cron: { type: 'string', description: 'Cron expression, e.g. "*/5 * * * *" (required for create)' },
+				action: { type: 'string', enum: ['pause', 'resume', 'delete'], description: 'Control action (omit to create)' },
+			},
+			required: ['name'],
+		},
+		async call(input): Promise<ToolResult> {
+			try {
+				if (!input.action) {
+					if (!input.prompt || !input.cron) {
+						return { content: 'Error: prompt and cron are required to create a schedule', isError: true };
+					}
+					cronManager.create(input.name, input.prompt, input.cron);
+					return { content: `Scheduled "${input.name}" with cron ${input.cron}`, isError: false };
+				}
+				let ok: boolean;
+				switch (input.action) {
+					case 'pause': ok = cronManager.pause(input.name); break;
+					case 'resume': ok = cronManager.resume(input.name); break;
+					case 'delete': ok = cronManager.delete(input.name); break;
+					default: return { content: `Unknown action: ${input.action}`, isError: true };
+				}
+				if (!ok) return { content: `Cron "${input.name}" not found`, isError: true };
+				return { content: `${input.action}d "${input.name}"`, isError: false };
+			} catch (e: any) {
+				return { content: e.message, isError: true };
+			}
 		},
 	};
 }

@@ -1,6 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { EventQueue } from './queue.mts';
 import { Logger } from './log.mts';
+import { CronRow } from './cron.mts';
 
 export interface ServerDeps {
 	port: number;
@@ -9,10 +10,12 @@ export interface ServerDeps {
 	getHealth: () => Record<string, unknown>;
 	getState: () => Record<string, unknown>;
 	getMemory: () => Record<string, unknown>;
+	listCrons: () => CronRow[];
+	setCronEnabled: (name: string, enabled: boolean) => boolean;
 }
 
 export function startServer(deps: ServerDeps) {
-	const { port, queue, log, getHealth, getState, getMemory } = deps;
+	const { port, queue, log, getHealth, getState, getMemory, listCrons, setCronEnabled } = deps;
 
 	const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
 		// GET /info/health — Liveness check. No DB queries.
@@ -37,8 +40,9 @@ export function startServer(deps: ServerDeps) {
 		//   context.system.pct         number       — percentage of budget
 		//   context.memory.tokens      number       — tokens used by long-term memory (memory.md)
 		//   context.memory.pct         number       — percentage of budget
-		//   context.compacted.tokens   number       — tokens used by compressed history summaries
-		//   context.compacted.pct      number       — percentage of budget
+		//   context.compacted.tokens         number       — tokens used by compressed history summaries
+		//   context.compacted.pct            number       — percentage of budget
+		//   context.compacted.originalTokens number       — original uncompacted token size
 		//   context.compacted.groups   number       — number of compressed groups
 		//   context.flow.tokens        number       — tokens used by uncompressed messages
 		//   context.flow.pct           number       — percentage of budget
@@ -51,6 +55,30 @@ export function startServer(deps: ServerDeps) {
 		//   ops.distillations           string[]     — last 10 distill timestamps (newest first)
 		if (req.method === 'GET' && req.url === '/info/memory') {
 			json(res, 200, getMemory());
+			return;
+		}
+
+		// GET /cron — List all scheduled crons.
+		//   Array of: { name, command, cron, cronHuman, enabled, last_run, created_at }
+		if (req.method === 'GET' && req.url === '/cron') {
+			json(res, 200, listCrons());
+			return;
+		}
+
+		// PUT /cron/:name/enabled — Toggle a cron's enabled state.
+		//   Request body: { enabled: boolean }
+		//   Response: { ok: true } or 404
+		const cronMatch = req.method === 'PUT' && req.url?.match(/^\/cron\/(.+)\/enabled$/);
+		if (cronMatch) {
+			try {
+				const name = decodeURIComponent(cronMatch[1]);
+				const body = JSON.parse(await readBody(req));
+				const ok = setCronEnabled(name, body.enabled);
+				if (!ok) { json(res, 404, { ok: false, error: 'cron not found' }); return; }
+				json(res, 200, { ok: true });
+			} catch (e: any) {
+				json(res, 400, { ok: false, error: e.message });
+			}
 			return;
 		}
 
@@ -69,7 +97,7 @@ export function startServer(deps: ServerDeps) {
 			try {
 				const body = JSON.parse(await readBody(req));
 				const id = queue.push(body.source, body.type, body.payload);
-				log.debug('event received', { source: body.source, type: body.type, id });
+				log.info('event received', { source: body.source, type: body.type, id });
 				json(res, 200, { ok: true, eventId: id });
 			} catch (e: any) {
 				json(res, 400, { ok: false, error: e.message });

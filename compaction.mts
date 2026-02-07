@@ -54,29 +54,20 @@ export function estimateTokens(text: string): number {
 /**
  * Summarize a group of messages using the LLM.
  */
-export async function summarizeGroup(group: Group, llm: LLMBase): Promise<string> {
+export async function summarizeGroup(group: Group, llm: LLMBase, promptsDir: string, priorContext?: string): Promise<string> {
 	const timestamp = new Date(group.messages[0].created_at * 1000).toISOString().slice(0, 16);
-	const formatted = group.messages.map(m => {
-		const role = m.role === 'assistant' ? 'Assistant' : 'User';
-		const content = truncateForSummary(m.content);
-		return `[${role}] ${content}`;
-	}).join('\n');
+	const formatted = JSON.stringify(group.messages.map(m => {
+		const ts = new Date(m.created_at * 1000).toISOString().slice(0, 19);
+		const role = m.role === 'assistant' ? 'agent' : 'user';
+		return formatForSummary(m.content, role, ts);
+	}).flat(), null, 2);
+
+	let system = readFileSync(`${promptsDir}/compaction.md`, 'utf-8').trim().replace('{{timestamp}}', timestamp);
+	if (priorContext) system += `\n\n# Previous context (for reference only — compress only the messages below, not this context)\n${priorContext}`;
 
 	const response = await llm.call(
 		[{ role: 'user', content: formatted }],
-		`You are a context compactor. Summarize the following conversation chunk into a brief, factual summary.
-Preserve:
-- What actions were taken (files read/written, commands run)
-- Decisions made and their rationale
-- Key facts and outcomes
-- Error messages and how they were resolved
-
-Drop:
-- Reasoning chains and thinking process
-- Redundant tool call details (just summarize the action + outcome)
-- Verbose file contents (just note what was read/written)
-
-Output a single paragraph prefixed with the timestamp [${timestamp}]. Be concise — aim for 2-5 sentences.`,
+		system,
 	);
 
 	const text = response.content
@@ -90,9 +81,9 @@ Output a single paragraph prefixed with the timestamp [${timestamp}]. Be concise
 /**
  * Compress a group: summarize and write context_content to DB.
  */
-export async function compressGroup(db: Database.Database, group: Group, llm: LLMBase): Promise<{ tokensBefore: number; tokensAfter: number }> {
+export async function compressGroup(db: Database.Database, group: Group, llm: LLMBase, promptsDir: string, priorContext?: string): Promise<{ tokensBefore: number; tokensAfter: number }> {
 	const tokensBefore = group.messages.reduce((sum, m) => sum + estimateTokens(m.content), 0);
-	const summary = await summarizeGroup(group, llm);
+	const summary = await summarizeGroup(group, llm, promptsDir, priorContext);
 	const tokensAfter = estimateTokens(summary);
 
 	const anchor = group.messages[group.messages.length - 1];
@@ -109,6 +100,43 @@ export async function compressGroup(db: Database.Database, group: Group, llm: LL
 		db.prepare(
 			'INSERT INTO compaction_log (op, group_start, group_end, tokens_before, tokens_after) VALUES (?, ?, ?, ?, ?)'
 		).run('compress', group.start, group.end, tokensBefore, tokensAfter);
+	});
+	tx();
+
+	return { tokensBefore, tokensAfter };
+}
+
+/**
+ * Compress multiple groups in a single LLM call. Used for idle compaction.
+ */
+export async function compressGroups(db: Database.Database, groups: Group[], llm: LLMBase, promptsDir: string): Promise<{ tokensBefore: number; tokensAfter: number }> {
+	const allMessages = groups.flatMap(g => g.messages);
+	const tokensBefore = allMessages.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+
+	const timestamp = new Date(allMessages[0].created_at * 1000).toISOString().slice(0, 16);
+	const formatted = JSON.stringify(allMessages.map(m => {
+		const ts = new Date(m.created_at * 1000).toISOString().slice(0, 19);
+		const role = m.role === 'assistant' ? 'agent' : 'user';
+		return formatForSummary(m.content, role, ts);
+	}).flat(), null, 2);
+
+	const system = readFileSync(`${promptsDir}/compaction.md`, 'utf-8').trim().replace('{{timestamp}}', timestamp);
+	const response = await llm.call([{ role: 'user', content: formatted }], system);
+	const summary = response.content
+		.filter(b => b.type === 'text')
+		.map(b => (b as Extract<typeof b, { type: 'text' }>).text)
+		.join('\n') || `[${timestamp}] (empty summary)`;
+
+	const tokensAfter = estimateTokens(summary);
+	const anchor = allMessages[allMessages.length - 1];
+
+	const tx = db.transaction(() => {
+		const skip = db.prepare("UPDATE messages SET context_content = '' WHERE rowid = ?");
+		for (const m of allMessages) skip.run(m.rowid);
+		db.prepare('UPDATE messages SET context_content = ? WHERE rowid = ?').run(summary, anchor.rowid);
+		db.prepare(
+			'INSERT INTO compaction_log (op, group_start, group_end, tokens_before, tokens_after) VALUES (?, ?, ?, ?, ?)'
+		).run('compress', groups[0].start, groups[groups.length - 1].end, tokensBefore, tokensAfter);
 	});
 	tx();
 
@@ -198,9 +226,33 @@ export function getUncompressedGroups(db: Database.Database, gapSeconds: number)
 /**
  * Truncate message content for the summarization prompt.
  */
-function truncateForSummary(content: string, maxChars = 2000): string {
-	if (content.length <= maxChars) return content;
-	return content.slice(0, maxChars) + `... (truncated, ${Math.round(content.length / 1000)}k total)`;
+function truncate(text: string, max: number): string {
+	return text.length > max ? text.slice(0, max) + '...' : text;
+}
+
+function formatForSummary(content: string, role: string, ts: string): Array<Record<string, string>> {
+	try {
+		const blocks = JSON.parse(content);
+		if (Array.isArray(blocks)) {
+			const entries: Array<Record<string, string>> = [];
+			for (const b of blocks) {
+				if (b.type === 'reasoning') continue;
+				if (b.type === 'text') entries.push({ role, time: ts, type: 'response', content: truncate(b.text, 2000) });
+				if (b.type === 'tool_use') entries.push({ role, time: ts, type: 'tool_call', tool: b.name, input: truncate(JSON.stringify(b.input), 500) });
+				if (b.type === 'tool_result') entries.push({ role, time: ts, type: 'tool_result', content: truncate(b.content || '', 500) });
+			}
+			return entries;
+		}
+	} catch {}
+	// Extract user message from event wrapper: "Event: chat:user_message\n{...\"content\":\"actual text\"}"
+	const eventMatch = content.match(/^Event: \S+\n(.+)$/s);
+	if (eventMatch) {
+		try {
+			const payload = JSON.parse(eventMatch[1]);
+			if (payload.content) return [{ role, time: ts, type: 'message', content: truncate(payload.content, 2000) }];
+		} catch {}
+	}
+	return [{ role, time: ts, type: 'message', content: truncate(content, 2000) }];
 }
 
 /**
@@ -214,6 +266,10 @@ export function getMemoryStats(db: Database.Database, memoryPath: string, tokenB
 	const compacted = db.prepare(
 		"SELECT count(*) as count, sum(length(context_content)) as size FROM messages WHERE context_content IS NOT NULL AND context_content != '' AND archived_at IS NULL"
 	).get() as { count: number; size: number | null };
+
+	const compactedOriginal = db.prepare(
+		"SELECT sum(length(content)) as size FROM messages WHERE context_content IS NOT NULL AND archived_at IS NULL"
+	).get() as { size: number | null };
 
 	const compactedGroups = db.prepare(
 		"SELECT count(DISTINCT group_end) as count FROM compaction_log WHERE op = 'compress'"
@@ -241,7 +297,7 @@ export function getMemoryStats(db: Database.Database, memoryPath: string, tokenB
 		context: {
 			system:    { tokens: systemTokens,    pct: Math.round(systemTokens / tokenBudget * 100) },
 			memory:    { tokens: memoryTokens,    pct: Math.round(memoryTokens / tokenBudget * 100) },
-			compacted: { tokens: compactedTokens, pct: Math.round(compactedTokens / tokenBudget * 100), groups: compactedGroups.count },
+			compacted: { tokens: compactedTokens, pct: Math.round(compactedTokens / tokenBudget * 100), groups: compactedGroups.count, originalTokens: estimateTokens(' '.repeat(compactedOriginal.size ?? 0)) },
 			flow:      { tokens: flowTokens,      pct: Math.round(flowTokens / tokenBudget * 100), messages: flow.count },
 			total:     { tokens: used,             pct: Math.round(used / tokenBudget * 100) },
 			budget:    tokenBudget,

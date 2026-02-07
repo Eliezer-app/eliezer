@@ -23,9 +23,11 @@ export interface LLMResponse {
 export abstract class LLMBase {
 	tokensUsed = 0;
 	tokenLimit: number;
+	protected timeoutMs: number;
 
-	constructor(tokenLimit = 500_000) {
+	constructor(tokenLimit = 500_000, timeoutMs = 120_000) {
 		this.tokenLimit = tokenLimit;
+		this.timeoutMs = timeoutMs;
 	}
 
 	hasBudget(): boolean { return this.tokensUsed < this.tokenLimit; }
@@ -37,7 +39,7 @@ export abstract class LLMBase {
 	abstract call(messages: Message[], system: string, tools?: ToolDef[]): Promise<LLMResponse>;
 }
 
-export function createLLM(opts: { provider: string; apiKey: string; model: string; baseUrl: string; tokenLimit?: number }): LLMBase {
+export function createLLM(opts: { provider: string; apiKey: string; model: string; baseUrl: string; tokenLimit?: number; timeoutMs?: number }): LLMBase {
 	return opts.provider === 'anthropic'
 		? new AnthropicLLM(opts)
 		: new OpenAILLM(opts);
@@ -48,8 +50,8 @@ export class AnthropicLLM extends LLMBase {
 	private model: string;
 	private baseUrl: string;
 
-	constructor(opts: { apiKey: string; model: string; baseUrl?: string; tokenLimit?: number }) {
-		super(opts.tokenLimit);
+	constructor(opts: { apiKey: string; model: string; baseUrl?: string; tokenLimit?: number; timeoutMs?: number }) {
+		super(opts.tokenLimit, opts.timeoutMs);
 		this.apiKey = opts.apiKey;
 		this.model = opts.model;
 		this.baseUrl = (opts.baseUrl ?? 'https://api.anthropic.com').replace(/\/$/, '');
@@ -75,8 +77,10 @@ export class AnthropicLLM extends LLMBase {
 					'anthropic-version': '2023-06-01',
 				},
 				body: JSON.stringify(body),
+				signal: AbortSignal.timeout(this.timeoutMs),
 			});
 		} catch (e: any) {
+			if (e.name === 'TimeoutError') throw new Error(`LLM timeout after ${this.timeoutMs / 1000}s: ${url}`);
 			throw new Error(`LLM unreachable at ${url}: ${e.message}`);
 		}
 
@@ -92,8 +96,8 @@ export class OpenAILLM extends LLMBase {
 	private model: string;
 	private baseUrl: string;
 
-	constructor(opts: { apiKey: string; model: string; baseUrl: string; tokenLimit?: number }) {
-		super(opts.tokenLimit);
+	constructor(opts: { apiKey: string; model: string; baseUrl: string; tokenLimit?: number; timeoutMs?: number }) {
+		super(opts.tokenLimit, opts.timeoutMs);
 		this.apiKey = opts.apiKey;
 		this.model = opts.model;
 		this.baseUrl = opts.baseUrl.replace(/\/$/, '');
@@ -118,8 +122,10 @@ export class OpenAILLM extends LLMBase {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
 				body: JSON.stringify(body),
+				signal: AbortSignal.timeout(this.timeoutMs),
 			});
 		} catch (e: any) {
+			if (e.name === 'TimeoutError') throw new Error(`LLM timeout after ${this.timeoutMs / 1000}s: ${url}`);
 			throw new Error(`LLM unreachable at ${url}: ${e.message}`);
 		}
 

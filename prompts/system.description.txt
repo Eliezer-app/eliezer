@@ -1,0 +1,1 @@
+Core system prompt. Defines who Eliezer is, its capabilities, and behavioral rules. Sent on every LLM call.

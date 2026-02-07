@@ -21,6 +21,8 @@ services:
     command: npx tsx eliezer.mts
     env_file:
       - .env
+    environment:
+      - LOG_LEVEL=debug
     depends_on:
       init:
         condition: service_completed_successfully

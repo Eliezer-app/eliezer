@@ -2,13 +2,15 @@ import { config } from 'dotenv';
 import { mkdirSync, readFileSync } from 'fs';
 import Database from 'better-sqlite3';
 import { Logger } from './log.mts';
-import { LLMBase, createLLM, ContentBlock } from './llm.mts';
+import { createLLM, ContentBlock } from './llm.mts';
 import { EventQueue, AgentEvent } from './queue.mts';
 import { Memory } from './memory.mts';
 import { startServer } from './server.mts';
-import { createTools, createSearchHistoryTool } from './tools.mts';
+import { createTools, createSearchHistoryTool, createScheduleTool } from './tools.mts';
+import { CronManager } from './cron.mts';
 import { ChatClient, createChatTool } from './chat.mts';
-import { getMemoryStats, getUncompressedGroups, compressGroup, estimateTokens, getCompactedSummaries, distillToMemory, archiveGroups } from './compaction.mts';
+import { getMemoryStats } from './compaction.mts';
+import { redactSecrets } from './detect-secret.mts';
 
 config();
 
@@ -43,9 +45,31 @@ const compactionLlm = createLLM({
 	apiKey: process.env.COMPACTION_LLM_API_KEY || LLM_API_KEY,
 	model: process.env.COMPACTION_LLM_MODEL || LLM_MODEL,
 	baseUrl: process.env.COMPACTION_LLM_BASE_URL || LLM_BASE_URL,
+	timeoutMs: 120_000,
 });
 const chat = new ChatClient(CHAT_URL);
-const tools = [...createTools(), createChatTool(chat), createSearchHistoryTool(db)];
+const cronManager = new CronManager(db);
+
+const TOKEN_BUDGET = 80_000;
+
+// Compaction config
+function parseDuration(s: string, defaultSec: number): number {
+	const m = s.match(/^(\d+)(s|m|h)?$/);
+	if (!m) return defaultSec;
+	const n = parseInt(m[1]);
+	switch (m[2]) {
+		case 'h': return n * 3600;
+		case 'm': return n * 60;
+		default: return n;
+	}
+}
+memory.setCompactionConfig({
+	tokenBudget: TOKEN_BUDGET,
+	groupGapSeconds: parseDuration(process.env.COMPACTION_GROUP_GAP || '1m', 60),
+	flowLimitSeconds: parseDuration(process.env.COMPACTION_FLOW_LIMIT || '1m', 60),
+	promptsDir: PROMPTS_DIR,
+});
+const tools = [...createTools(), createChatTool(chat), createSearchHistoryTool(db), createScheduleTool(cronManager)];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
 function readPrompt(name: string): string {
@@ -57,11 +81,17 @@ function getSystem(): string {
 	const parts = [readPrompt('system.md'), readPrompt('user.md')];
 	const mem = readPrompt('memory.md');
 	if (mem) parts.push(`# Memory\n${mem}`);
+	const crons = cronManager.list();
+	if (crons.length) {
+		const lines = crons.map(c =>
+			`- ${c.name}: "${c.prompt}" (${c.cronHuman}${c.enabled ? '' : ', disabled'})`
+		);
+		parts.push(`# Scheduled Tasks\n${lines.join('\n')}`);
+	}
 	return parts.filter(Boolean).join('\n\n');
 }
 
 const startTime = Date.now();
-const TOKEN_BUDGET = 80_000;
 let currentEvent: { source: string; type: string } | null = null;
 
 startServer({
@@ -79,73 +109,11 @@ startServer({
 		const mem = readPrompt('memory.md');
 		return getMemoryStats(db, `${PROMPTS_DIR}/memory.md`, TOKEN_BUDGET, system.length, mem.length);
 	},
+	listCrons: () => cronManager.list(),
+	setCronEnabled: (name, enabled) => cronManager.setEnabled(name, enabled),
 });
 
-// Compaction config
-function parseDuration(s: string, defaultSec: number): number {
-	const m = s.match(/^(\d+)(s|m|h)?$/);
-	if (!m) return defaultSec;
-	const n = parseInt(m[1]);
-	switch (m[2]) {
-		case 'h': return n * 3600;
-		case 'm': return n * 60;
-		default: return n;
-	}
-}
-const COMPACTION_GROUP_GAP = parseDuration(process.env.COMPACTION_GROUP_GAP || '1m', 60);
-const COMPACTION_FLOW_LIMIT = parseDuration(process.env.COMPACTION_FLOW_LIMIT || '1m', 60);
-const IDLE_TARGET = TOKEN_BUDGET / 3;
-const EMERGENCY_THRESHOLD = TOKEN_BUDGET * 0.9;
 const compactionLog = log.with({ module: 'Compaction' });
-
-function currentTokenUsage(): number {
-	const rows = db.prepare(
-		"SELECT content FROM messages WHERE context_content IS NULL AND archived_at IS NULL"
-	).all() as Array<{ content: string }>;
-	return rows.reduce((sum, r) => sum + estimateTokens(r.content), 0);
-}
-
-async function idleCompaction(): Promise<void> {
-	const tokens = currentTokenUsage();
-	if (tokens <= IDLE_TARGET) return;
-
-	const groups = getUncompressedGroups(db, COMPACTION_GROUP_GAP);
-	if (groups.length < 2) return; // keep at least the current group
-
-	const now = Math.floor(Date.now() / 1000);
-	const oldest = groups[0];
-	const lastMsgTime = oldest.messages[oldest.messages.length - 1].created_at;
-	if (now - lastMsgTime < COMPACTION_FLOW_LIMIT) return;
-
-	compactionLog.info('idle compression', {
-		tokens: String(tokens),
-		target: String(IDLE_TARGET),
-		groupMessages: String(oldest.messages.length),
-	});
-	const result = await compressGroup(db, oldest, compactionLlm);
-	compactionLog.info('compressed', {
-		tokensBefore: String(result.tokensBefore),
-		tokensAfter: String(result.tokensAfter),
-	});
-}
-
-async function emergencyCompaction(): Promise<void> {
-	const tokens = currentTokenUsage();
-	if (tokens <= EMERGENCY_THRESHOLD) return;
-
-	const groups = getUncompressedGroups(db, COMPACTION_GROUP_GAP);
-	if (groups.length < 2) return;
-
-	compactionLog.info('emergency compression', {
-		tokens: String(tokens),
-		threshold: String(EMERGENCY_THRESHOLD),
-	});
-	const result = await compressGroup(db, groups[0], compactionLlm);
-	compactionLog.info('compressed', {
-		tokensBefore: String(result.tokensBefore),
-		tokensAfter: String(result.tokensAfter),
-	});
-}
 
 // Main loop
 function sleep(ms: number): Promise<void> {
@@ -168,8 +136,17 @@ while (true) {
 	if (!event) {
 		queue.cancelWait();
 		currentEvent = null;
-		try { await idleCompaction(); } catch (e: any) {
+		log.debug('heartbeat');
+		try {
+			const result = await memory.compact(compactionLlm);
+			if (result) compactionLog.info('idle compaction', { tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter) });
+		} catch (e: any) {
 			compactionLog.error('idle compaction failed', { error: e.message });
+		}
+		const dueCrons = cronManager.checkDue();
+		for (const { name, prompt } of dueCrons) {
+			log.info('cron due', { name });
+			queue.push('cron', 'scheduled', { name, prompt });
 		}
 		continue;
 	}
@@ -205,14 +182,22 @@ async function handleEvent(event: AgentEvent) {
 
 	const payload = event.payload as any;
 	const chatMessageId = payload?.messageId;
-	memory.add('user', `Event: ${event.source}:${event.type}\n${JSON.stringify(event.payload)}`, chatMessageId);
+
+	if (event.source === 'cron') {
+		memory.add('user', `[cron:${payload.name}] ${payload.prompt}`);
+	} else {
+		memory.add('user', `Event: ${event.source}:${event.type}\n${JSON.stringify(event.payload)}`, chatMessageId);
+	}
 
 	// Show typing indicator while processing
 	await chat.typing(true);
 
 	try {
 		while (true) {
-			try { await emergencyCompaction(); } catch (e: any) {
+			try {
+				const result = await memory.compactTail(compactionLlm);
+				if (result) compactionLog.info('emergency compaction', { tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter) });
+			} catch (e: any) {
 				compactionLog.error('emergency compaction failed', { error: e.message });
 			}
 			const response = await llm.call(memory.getContext(), getSystem(), toolDefs);
@@ -254,13 +239,14 @@ async function handleEvent(event: AgentEvent) {
 					continue;
 				}
 				log.info(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
-				let { content, isError, signal } = await tool.call(tu.input);
+				let { content, isError, signal, skipSecretRedaction } = await tool.call(tu.input);
 				if (content.length > TOOL_OUTPUT_MAX_CHARS) {
 					const preview = content.slice(0, TOOL_OUTPUT_PREVIEW_CHARS);
 					const size = content.length >= 1000 ? Math.round(content.length / 1000) + 'k' : String(content.length);
 					content = `Error: content too large: ${size} chars (limit: ${TOOL_OUTPUT_MAX_CHARS / 1000}k). Use more targeted commands.\n\nFirst ${TOOL_OUTPUT_PREVIEW_CHARS} chars:\n${preview}`;
 					isError = true;
 				}
+				content = redactSecrets(content, skipSecretRedaction);
 				log.info(`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
 				results.push({ type: 'tool_result', tool_use_id: tu.id, content });
 				if (signal === 'restart') { shouldBreak = true; break; }

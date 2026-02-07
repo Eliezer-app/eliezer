@@ -1,0 +1,1 @@
+Compaction prompt. Used to compress old conversation chunks into briefings that preserve decisions, mistakes, and context a successor agent can't get from files.
