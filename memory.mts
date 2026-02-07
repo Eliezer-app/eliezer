@@ -13,7 +13,26 @@ export class Memory {
 				chat_message_id TEXT PRIMARY KEY,
 				role TEXT NOT NULL,
 				content TEXT NOT NULL,
-				created_at INTEGER DEFAULT (unixepoch())
+				created_at INTEGER DEFAULT (unixepoch()),
+				context_content TEXT,
+				archived_at TEXT
+			);
+		`);
+		// Migrate existing tables
+		const cols = db.pragma('table_info(messages)') as Array<{ name: string }>;
+		const colNames = new Set(cols.map(c => c.name));
+		if (!colNames.has('context_content')) db.exec('ALTER TABLE messages ADD COLUMN context_content TEXT');
+		if (!colNames.has('archived_at')) db.exec('ALTER TABLE messages ADD COLUMN archived_at TEXT');
+
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS compaction_log (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				op TEXT NOT NULL,
+				group_start INTEGER,
+				group_end INTEGER,
+				tokens_before INTEGER,
+				tokens_after INTEGER,
+				created_at TEXT DEFAULT (datetime('now'))
 			);
 		`);
 	}

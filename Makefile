@@ -1,4 +1,4 @@
-.PHONY: dev dev-down shell logs stop clean test test-up test-down export export-html
+.PHONY: dev dev-down shell logs stop clean test test-up test-down export export-html api-docs
 
 dev: test-down dev-down
 	docker compose up -d
@@ -33,3 +33,6 @@ export:
 
 export-html:
 	@npx tsx export-chat-html.mts
+
+api-docs:
+	@npx tsx -e "const s=require('fs').readFileSync('server.mts','utf-8');for(const l of s.split('\n')){const m=l.match(/^\t\t\/\/ ?(.*)/);if(m)console.log(m[1])}"

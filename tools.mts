@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
 import { readFileSync, writeFileSync } from 'fs';
+import Database from 'better-sqlite3';
 import { ToolDef } from './llm.mts';
 
 export interface ToolResult {
@@ -106,4 +107,50 @@ export function createTools(): Tool[] {
 			call: async () => ({ content: 'restarting', isError: false, signal: 'restart' as const }),
 		},
 	];
+}
+
+export function createSearchHistoryTool(db: Database.Database): Tool {
+	return {
+		name: 'search_history',
+		description: 'Search past conversation history. Finds messages matching a query across all messages, including those compacted out of context.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Search term (matched against raw message content)' },
+				limit: { type: 'number', description: 'Max results (default: 10)' },
+			},
+			required: ['query'],
+		},
+		async call({ query, limit }): Promise<ToolResult> {
+			const maxResults = limit ?? 10;
+			const rows = db.prepare(
+				`SELECT role, content, context_content, created_at FROM messages
+				 WHERE content LIKE ? OR context_content LIKE ?
+				 ORDER BY rowid DESC LIMIT ?`
+			).all(`%${query}%`, `%${query}%`, maxResults) as Array<{
+				role: string; content: string; context_content: string | null; created_at: number;
+			}>;
+
+			if (!rows.length) return { content: `No messages matching "${query}"`, isError: false };
+
+			const results = rows.map(r => {
+				const ts = new Date(r.created_at * 1000).toISOString().slice(0, 16);
+				const snippet = extractSnippet(r.content, query, 200);
+				const summary = r.context_content && r.context_content !== '' ? `\n  Summary: ${r.context_content.slice(0, 200)}` : '';
+				return `[${ts}] ${r.role}: ${snippet}${summary}`;
+			}).join('\n\n');
+
+			return { content: `${rows.length} result(s):\n\n${results}`, isError: false };
+		},
+	};
+}
+
+function extractSnippet(content: string, query: string, maxLen: number): string {
+	const idx = content.toLowerCase().indexOf(query.toLowerCase());
+	if (idx === -1) return content.slice(0, maxLen);
+	const start = Math.max(0, idx - 80);
+	const end = Math.min(content.length, idx + query.length + 80);
+	const prefix = start > 0 ? '...' : '';
+	const suffix = end < content.length ? '...' : '';
+	return prefix + content.slice(start, end) + suffix;
 }

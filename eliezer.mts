@@ -2,12 +2,13 @@ import { config } from 'dotenv';
 import { mkdirSync, readFileSync } from 'fs';
 import Database from 'better-sqlite3';
 import { Logger } from './log.mts';
-import { LLMBase, AnthropicLLM, OpenAILLM, ContentBlock } from './llm.mts';
+import { LLMBase, createLLM, ContentBlock } from './llm.mts';
 import { EventQueue, AgentEvent } from './queue.mts';
 import { Memory } from './memory.mts';
 import { startServer } from './server.mts';
-import { createTools } from './tools.mts';
+import { createTools, createSearchHistoryTool } from './tools.mts';
 import { ChatClient, createChatTool } from './chat.mts';
+import { getMemoryStats, getUncompressedGroups, compressGroup, estimateTokens, getCompactedSummaries, distillToMemory, archiveGroups } from './compaction.mts';
 
 config();
 
@@ -36,11 +37,15 @@ const db = new Database(DB_PATH);
 // Components
 const queue = new EventQueue(db);
 const memory = new Memory(db);
-const llm: LLMBase = LLM_PROVIDER === 'anthropic'
-	? new AnthropicLLM({ apiKey: LLM_API_KEY, model: LLM_MODEL, baseUrl: LLM_BASE_URL })
-	: new OpenAILLM({ apiKey: LLM_API_KEY, model: LLM_MODEL, baseUrl: LLM_BASE_URL });
+const llm = createLLM({ provider: LLM_PROVIDER, apiKey: LLM_API_KEY, model: LLM_MODEL, baseUrl: LLM_BASE_URL });
+const compactionLlm = createLLM({
+	provider: process.env.COMPACTION_LLM_PROVIDER || LLM_PROVIDER,
+	apiKey: process.env.COMPACTION_LLM_API_KEY || LLM_API_KEY,
+	model: process.env.COMPACTION_LLM_MODEL || LLM_MODEL,
+	baseUrl: process.env.COMPACTION_LLM_BASE_URL || LLM_BASE_URL,
+});
 const chat = new ChatClient(CHAT_URL);
-const tools = [...createTools(), createChatTool(chat)];
+const tools = [...createTools(), createChatTool(chat), createSearchHistoryTool(db)];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
 function readPrompt(name: string): string {
@@ -55,19 +60,92 @@ function getSystem(): string {
 	return parts.filter(Boolean).join('\n\n');
 }
 
-// HTTP server
 const startTime = Date.now();
-startServer(
-	parseInt(AGENT_PORT),
+const TOKEN_BUDGET = 80_000;
+let currentEvent: { source: string; type: string } | null = null;
+
+startServer({
+	port: parseInt(AGENT_PORT),
 	queue,
-	() => ({
-		status: 'ok',
-		uptime: Math.floor((Date.now() - startTime) / 1000),
+	log: log.with({ module: 'Server' }),
+	getHealth: () => ({ status: 'ok', uptime: Math.floor((Date.now() - startTime) / 1000) }),
+	getState: () => ({
+		currentEvent,
 		queueDepth: queue.depth(),
 		tokensUsed: llm.tokensUsed,
 	}),
-	log.with({ module: 'Server' }),
-);
+	getMemory: () => {
+		const system = [readPrompt('system.md'), readPrompt('user.md')].filter(Boolean).join('\n\n');
+		const mem = readPrompt('memory.md');
+		return getMemoryStats(db, `${PROMPTS_DIR}/memory.md`, TOKEN_BUDGET, system.length, mem.length);
+	},
+});
+
+// Compaction config
+function parseDuration(s: string, defaultSec: number): number {
+	const m = s.match(/^(\d+)(s|m|h)?$/);
+	if (!m) return defaultSec;
+	const n = parseInt(m[1]);
+	switch (m[2]) {
+		case 'h': return n * 3600;
+		case 'm': return n * 60;
+		default: return n;
+	}
+}
+const COMPACTION_GROUP_GAP = parseDuration(process.env.COMPACTION_GROUP_GAP || '1m', 60);
+const COMPACTION_FLOW_LIMIT = parseDuration(process.env.COMPACTION_FLOW_LIMIT || '1m', 60);
+const IDLE_TARGET = TOKEN_BUDGET / 3;
+const EMERGENCY_THRESHOLD = TOKEN_BUDGET * 0.9;
+const compactionLog = log.with({ module: 'Compaction' });
+
+function currentTokenUsage(): number {
+	const rows = db.prepare(
+		"SELECT content FROM messages WHERE context_content IS NULL AND archived_at IS NULL"
+	).all() as Array<{ content: string }>;
+	return rows.reduce((sum, r) => sum + estimateTokens(r.content), 0);
+}
+
+async function idleCompaction(): Promise<void> {
+	const tokens = currentTokenUsage();
+	if (tokens <= IDLE_TARGET) return;
+
+	const groups = getUncompressedGroups(db, COMPACTION_GROUP_GAP);
+	if (groups.length < 2) return; // keep at least the current group
+
+	const now = Math.floor(Date.now() / 1000);
+	const oldest = groups[0];
+	const lastMsgTime = oldest.messages[oldest.messages.length - 1].created_at;
+	if (now - lastMsgTime < COMPACTION_FLOW_LIMIT) return;
+
+	compactionLog.info('idle compression', {
+		tokens: String(tokens),
+		target: String(IDLE_TARGET),
+		groupMessages: String(oldest.messages.length),
+	});
+	const result = await compressGroup(db, oldest, compactionLlm);
+	compactionLog.info('compressed', {
+		tokensBefore: String(result.tokensBefore),
+		tokensAfter: String(result.tokensAfter),
+	});
+}
+
+async function emergencyCompaction(): Promise<void> {
+	const tokens = currentTokenUsage();
+	if (tokens <= EMERGENCY_THRESHOLD) return;
+
+	const groups = getUncompressedGroups(db, COMPACTION_GROUP_GAP);
+	if (groups.length < 2) return;
+
+	compactionLog.info('emergency compression', {
+		tokens: String(tokens),
+		threshold: String(EMERGENCY_THRESHOLD),
+	});
+	const result = await compressGroup(db, groups[0], compactionLlm);
+	compactionLog.info('compressed', {
+		tokensBefore: String(result.tokensBefore),
+		tokensAfter: String(result.tokensAfter),
+	});
+}
 
 // Main loop
 function sleep(ms: number): Promise<void> {
@@ -89,6 +167,10 @@ while (true) {
 
 	if (!event) {
 		queue.cancelWait();
+		currentEvent = null;
+		try { await idleCompaction(); } catch (e: any) {
+			compactionLog.error('idle compaction failed', { error: e.message });
+		}
 		continue;
 	}
 
@@ -106,6 +188,7 @@ while (true) {
 		continue;
 	}
 
+	currentEvent = { source: event.source, type: event.type };
 	try {
 		await handleEvent(event);
 	} catch (e: any) {
@@ -129,6 +212,9 @@ async function handleEvent(event: AgentEvent) {
 
 	try {
 		while (true) {
+			try { await emergencyCompaction(); } catch (e: any) {
+				compactionLog.error('emergency compaction failed', { error: e.message });
+			}
 			const response = await llm.call(memory.getContext(), getSystem(), toolDefs);
 
 			// Keep text, tool_use, and reasoning blocks. Reasoning is needed for providers

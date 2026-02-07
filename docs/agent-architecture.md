@@ -18,7 +18,7 @@ memory.mts     — Memory (SQLite-backed conversation context)
 llm.mts        — LLMBase, AnthropicLLM, OpenAILLM, ContentBlock, Message
 tools.mts      — Tool interface, exec/write/read/restart_self
 chat.mts       — ChatClient, chat tool
-server.mts     — HTTP server (POST /events, GET /health)
+server.mts     — HTTP server (POST /events, GET /info/*)
 log.mts        — Logger (logfmt, levels, child loggers)
 prompts/       — system.md, user.md, memory.md
 ```
@@ -139,18 +139,7 @@ All env vars are required (validated at startup via `requireEnv()`):
 
 ## API
 
-### POST /events
-
-```json
-{ "source": "chat", "type": "user_message", "payload": { "content": "Hello" } }
-→ { "ok": true, "eventId": 1 }
-```
-
-### GET /health
-
-```json
-{ "status": "ok", "uptime": 3600, "queueDepth": 0, "tokensUsed": 1234 }
-```
+See `server.mts` header comment for the full endpoint reference.
 
 ## Queue Persistence
 

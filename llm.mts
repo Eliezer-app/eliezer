@@ -37,6 +37,12 @@ export abstract class LLMBase {
 	abstract call(messages: Message[], system: string, tools?: ToolDef[]): Promise<LLMResponse>;
 }
 
+export function createLLM(opts: { provider: string; apiKey: string; model: string; baseUrl: string; tokenLimit?: number }): LLMBase {
+	return opts.provider === 'anthropic'
+		? new AnthropicLLM(opts)
+		: new OpenAILLM(opts);
+}
+
 export class AnthropicLLM extends LLMBase {
 	private apiKey: string;
 	private model: string;

@@ -4,11 +4,11 @@ const MOCK_LLM = 'http://localhost:9999';
 const MOCK_CHAT = 'http://localhost:4100';
 const AGENT = 'http://localhost:3200';
 
-async function waitForHealth(url: string, timeoutMs = 30_000) {
+async function waitForHealth(url: string, healthPath = '/health', timeoutMs = 30_000) {
 	const start = Date.now();
 	while (Date.now() - start < timeoutMs) {
 		try {
-			const res = await fetch(`${url}/health`);
+			const res = await fetch(`${url}${healthPath}`);
 			if (res.ok) return;
 		} catch {}
 		await new Promise(r => setTimeout(r, 500));
@@ -38,7 +38,7 @@ describe('agent integration', () => {
 	beforeAll(async () => {
 		await waitForHealth(MOCK_LLM);
 		await waitForHealth(MOCK_CHAT);
-		await waitForHealth(AGENT);
+		await waitForHealth(AGENT, '/info/health');
 	}, 60_000);
 
 	beforeEach(async () => {
@@ -47,11 +47,9 @@ describe('agent integration', () => {
 	});
 
 	it('agent is healthy', async () => {
-		const body = await fetch(`${AGENT}/health`).then(r => r.json());
+		const body = await fetch(`${AGENT}/info/health`).then(r => r.json());
 		expect(body.status).toBe('ok');
 		expect(body).toHaveProperty('uptime');
-		expect(body).toHaveProperty('queueDepth');
-		expect(body).toHaveProperty('tokensUsed');
 	});
 
 	it('event → LLM call → text auto-sent to chat', async () => {
@@ -120,11 +118,12 @@ describe('agent integration', () => {
 		expect(hasSecond).toBe(true);
 	}, 15_000);
 
-	it('health reports token usage after LLM calls', async () => {
+	it('state reports token usage after LLM calls', async () => {
 		await postEvent('test', 'ping');
 		await waitForCalls(MOCK_LLM, 2);
 
-		const body = await fetch(`${AGENT}/health`).then(r => r.json());
+		const body = await fetch(`${AGENT}/info/state`).then(r => r.json());
 		expect(body.tokensUsed).toBeGreaterThan(0);
+		expect(body).toHaveProperty('queueDepth');
 	}, 15_000);
 });
