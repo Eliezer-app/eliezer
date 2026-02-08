@@ -7,8 +7,8 @@ export class ChatClient {
 		this.baseUrl = baseUrl.replace(/\/$/, '');
 	}
 
-	async send(conversationId: string, content: string): Promise<any> {
-		return this.request('POST', '/send', { conversationId, content });
+	async send(conversationId: string, content: string, type?: string): Promise<any> {
+		return this.request('POST', '/send', { conversationId, content, ...(type ? { type } : {}) });
 	}
 
 	async updateMessage(messageId: string, content: string): Promise<any> {

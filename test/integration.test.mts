@@ -94,7 +94,7 @@ describe('agent integration', () => {
 
 		// Agent should call mock chat server (filter out typing calls)
 		const chatCalls = await waitForCalls(MOCK_CHAT, 1);
-		const sendCalls = chatCalls.filter((c: any) => c.url === '/send');
+		const sendCalls = chatCalls.filter((c: any) => c.url === '/send' && !c.body.type);
 		expect(sendCalls.length).toBeGreaterThanOrEqual(1);
 		expect(sendCalls[0].method).toBe('POST');
 		expect(sendCalls[0].body.content).toBe('Hello from agent');

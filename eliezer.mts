@@ -203,10 +203,14 @@ async function handleEvent(event: AgentEvent) {
 			const response = await llm.call(memory.getContext(), getSystem(), toolDefs);
 
 			// Keep text, tool_use, and reasoning blocks. Reasoning is needed for providers
-			// that require it on history replay (e.g. Kimi). Not sent to chat.
+			// that require it on history replay (e.g. Kimi).
 			const content = response.content.filter(b => b.type === 'text' || b.type === 'tool_use' || b.type === 'reasoning');
 			for (const block of content) {
 				if (block.type === 'text') log.info('llm', { text: block.text });
+				if (block.type === 'reasoning') {
+					const text = (block as any).text || (block as any).content;
+					if (text) await chat.send('default', text, 'thought').catch((e: any) => log.error('chat send thought', { error: e.message }));
+				}
 			}
 			const toolUses = response.content.filter(b => b.type === 'tool_use') as
 				Array<Extract<ContentBlock, { type: 'tool_use' }>>;
@@ -239,6 +243,7 @@ async function handleEvent(event: AgentEvent) {
 					continue;
 				}
 				log.info(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
+				await chat.send('default', JSON.stringify({ tool: tu.name, input: tu.input }), 'tool_call').catch((e: any) => log.error('chat send tool_call', { tool: tu.name, error: e.message }));
 				let { content, isError, signal, skipSecretRedaction } = await tool.call(tu.input);
 				if (content.length > TOOL_OUTPUT_MAX_CHARS) {
 					const preview = content.slice(0, TOOL_OUTPUT_PREVIEW_CHARS);
@@ -248,6 +253,7 @@ async function handleEvent(event: AgentEvent) {
 				}
 				content = redactSecrets(content, skipSecretRedaction);
 				log.info(`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
+				await chat.send('default', JSON.stringify({ tool: tu.name, result: content, isError }), 'tool_result').catch((e: any) => log.error('chat send tool_result', { tool: tu.name, error: e.message }));
 				results.push({ type: 'tool_result', tool_use_id: tu.id, content });
 				if (signal === 'restart') { shouldBreak = true; break; }
 			}
@@ -260,7 +266,7 @@ async function handleEvent(event: AgentEvent) {
 		}
 	} catch (e) {
 		// Ensure typing is turned off on error
-		await chat.typing(false).catch(() => {});
+		await chat.typing(false).catch((e: any) => log.error('chat typing off', { error: e.message }));
 		throw e;
 	}
 }
