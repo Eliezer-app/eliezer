@@ -39,6 +39,9 @@
   Memory search, file search, web search.
   Semantic vs keyword. Embeddings.
 
+- [ ] **Prompt placeholders**
+  Replace placeholders in prompts at runtime, e.g. `{{APP_DIR}}` → `/app`, so paths like `{{APP_DIR}}/chat-public/` resolve correctly.
+
 - [ ] **Security audit**
 
 # Done

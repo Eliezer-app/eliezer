@@ -72,8 +72,18 @@ memory.setCompactionConfig({
 const tools = [...createTools(), createChatTool(chat), createSearchHistoryTool(db), createScheduleTool(cronManager)];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
+const APP_DIR = requireEnv('APP_DIR');
+
+const PROMPT_VARS: Record<string, string> = {
+	'{{APP_DIR}}': APP_DIR,
+};
+
 function readPrompt(name: string): string {
-	try { return readFileSync(`${PROMPTS_DIR}/${name}`, 'utf-8').trim(); }
+	try {
+		let text = readFileSync(`${PROMPTS_DIR}/${name}`, 'utf-8').trim();
+		for (const [k, v] of Object.entries(PROMPT_VARS)) text = text.replaceAll(k, v);
+		return text;
+	}
 	catch { return ''; }
 }
 
