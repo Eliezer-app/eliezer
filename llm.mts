@@ -36,7 +36,7 @@ export abstract class LLMBase {
 		this.tokensUsed += input + output;
 	}
 
-	abstract call(messages: Message[], system: string, tools?: ToolDef[]): Promise<LLMResponse>;
+	abstract call(messages: Message[], system: string, tools?: ToolDef[], signal?: AbortSignal): Promise<LLMResponse>;
 }
 
 export function createLLM(opts: { provider: string; apiKey: string; model: string; baseUrl: string; tokenLimit?: number; timeoutMs?: number }): LLMBase {
@@ -57,7 +57,7 @@ export class AnthropicLLM extends LLMBase {
 		this.baseUrl = (opts.baseUrl ?? 'https://api.anthropic.com').replace(/\/$/, '');
 	}
 
-	async call(messages: Message[], system: string, tools: ToolDef[] = []): Promise<LLMResponse> {
+	async call(messages: Message[], system: string, tools: ToolDef[] = [], signal?: AbortSignal): Promise<LLMResponse> {
 		const body: any = {
 			model: this.model,
 			max_tokens: 4096,
@@ -68,6 +68,8 @@ export class AnthropicLLM extends LLMBase {
 
 		const url = `${this.baseUrl}/v1/messages`;
 		let res: Response;
+		const signals = [AbortSignal.timeout(this.timeoutMs)];
+		if (signal) signals.push(signal);
 		try {
 			res = await fetch(url, {
 				method: 'POST',
@@ -77,7 +79,7 @@ export class AnthropicLLM extends LLMBase {
 					'anthropic-version': '2023-06-01',
 				},
 				body: JSON.stringify(body),
-				signal: AbortSignal.timeout(this.timeoutMs),
+				signal: AbortSignal.any(signals),
 			});
 		} catch (e: any) {
 			if (e.name === 'TimeoutError') throw new Error(`LLM timeout after ${this.timeoutMs / 1000}s: ${url}`);
@@ -103,7 +105,7 @@ export class OpenAILLM extends LLMBase {
 		this.baseUrl = opts.baseUrl.replace(/\/$/, '');
 	}
 
-	async call(messages: Message[], system: string, tools: ToolDef[] = []): Promise<LLMResponse> {
+	async call(messages: Message[], system: string, tools: ToolDef[] = [], signal?: AbortSignal): Promise<LLMResponse> {
 		const body: any = {
 			model: this.model,
 			messages: this.messagesToOpenAI(messages, system),
@@ -117,12 +119,14 @@ export class OpenAILLM extends LLMBase {
 
 		const url = `${this.baseUrl}/v1/chat/completions`;
 		let res: Response;
+		const signals = [AbortSignal.timeout(this.timeoutMs)];
+		if (signal) signals.push(signal);
 		try {
 			res = await fetch(url, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
 				body: JSON.stringify(body),
-				signal: AbortSignal.timeout(this.timeoutMs),
+				signal: AbortSignal.any(signals),
 			});
 		} catch (e: any) {
 			if (e.name === 'TimeoutError') throw new Error(`LLM timeout after ${this.timeoutMs / 1000}s: ${url}`);

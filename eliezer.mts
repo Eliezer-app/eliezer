@@ -112,7 +112,7 @@ startServer({
 	},
 	listCrons: () => cronManager.list(),
 	setCronEnabled: (name, enabled) => cronManager.setEnabled(name, enabled),
-	stop: () => {
+	stop: async () => {
 		if (!abortController) return false;
 		abortController.abort();
 		return true;
@@ -176,9 +176,14 @@ while (true) {
 	try {
 		await handleEvent(event, abortController.signal);
 	} catch (e: any) {
-		log.error('event failed', { source: event.source, type: event.type, error: e.message });
-		try { await chat.send('default', `Error: ${e.message}`); } catch (ce: any) {
-			log.error('chat send failed', { error: ce.message });
+		if (e.name === 'AbortError') {
+			log.info('event aborted by user', { source: event.source, type: event.type });
+			await chat.send('default', '(stopped)').catch(() => {});
+		} else {
+			log.error('event failed', { source: event.source, type: event.type, error: e.message });
+			try { await chat.send('default', `Error: ${e.message}`); } catch (ce: any) {
+				log.error('chat send failed', { error: ce.message });
+			}
 		}
 	}
 	abortController = null;
@@ -223,7 +228,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					if (compactionRetries === 0) compactionLog.error('emergency compaction exhausted, context may exceed budget');
 				}
 			}
-			const response = await llm.call(memory.getContext(), getSystem(), toolDefs);
+			const response = await llm.call(memory.getContext(), getSystem(), toolDefs, signal);
 
 			// Keep text, tool_use, and reasoning blocks. Reasoning is needed for providers
 			// that require it on history replay (e.g. Kimi).

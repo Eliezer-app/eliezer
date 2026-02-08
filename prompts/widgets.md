@@ -77,3 +77,11 @@ body.widget-fullscreen { height: 100%; }
 ```
 
 Note: curl/wget are not installed — use the wget tool to download files!
+
+## Widget Debugging
+
+Use `widget.log(...)` to write to server-side log files. Acts similar to console.log().
+Logs are written to apps/<app-name>/<widget-name>/logs/<YYYY-MM-DD>.log.
+Only works for file-based widgets (widget:path/file.html), not inline widgets. Example:                                      
+  widget.log("initialized", { count: items.length });
+  widget.log("click", event.target.id);
