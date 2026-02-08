@@ -3,21 +3,22 @@ name: eliezer
 services:
   init:
     image: node:22-slim
-    working_dir: /app
+    working_dir: /opt/eliezer
     volumes:
-      - .:/app
-      - node_modules:/app/node_modules
+      - .:/opt/eliezer
+      - node_modules:/opt/eliezer/node_modules
     command: npm ci
 
   eliezer:
     image: node:22-slim
     container_name: eliezer
-    working_dir: /app
+    working_dir: /opt/eliezer
     ports:
       - "3200:3200"
     volumes:
-      - .:/app
-      - node_modules:/app/node_modules
+      - .:/opt/eliezer
+      - ../clawchat:/opt/clawchat
+      - node_modules:/opt/eliezer/node_modules
     command: npx tsx eliezer.mts
     env_file:
       - .env

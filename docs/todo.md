@@ -1,9 +1,5 @@
 # TODO
 
-- [ ] **Audio transcription**
-  Transcribe audio attachments via Groq Whisper API (fast, cheap, OpenAI-compatible).
-  Pass transcript to LLM as text content.
-
 - [ ] **App/widget development**
   Integrate app and widget development into the agent workflow.
 
@@ -39,6 +35,10 @@
   Memory search, file search, web search.
   Semantic vs keyword. Embeddings.
 
+
+- [ ] **Audio transcription**
+  Transcribe audio attachments via Groq Whisper API (fast, cheap, OpenAI-compatible).
+  Pass transcript to LLM as text content.
 
 - [ ] **Security audit**
 

@@ -72,23 +72,13 @@ memory.setCompactionConfig({
 const tools = [...createTools(), createChatTool(chat), createSearchHistoryTool(db), createScheduleTool(cronManager)];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
-const APP_DIR = requireEnv('APP_DIR');
-
-const PROMPT_VARS: Record<string, string> = {
-	'{{APP_DIR}}': APP_DIR,
-};
-
 function readPrompt(name: string): string {
-	try {
-		let text = readFileSync(`${PROMPTS_DIR}/${name}`, 'utf-8').trim();
-		for (const [k, v] of Object.entries(PROMPT_VARS)) text = text.replaceAll(k, v);
-		return text;
-	}
+	try { return readFileSync(`${PROMPTS_DIR}/${name}`, 'utf-8').trim(); }
 	catch { return ''; }
 }
 
 function getSystem(): string {
-	const parts = [readPrompt('system.md'), readPrompt('user.md')];
+	const parts = [readPrompt('system.md'), readPrompt('user.md'), readPrompt('widgets.md')];
 	const mem = readPrompt('memory.md');
 	if (mem) parts.push(`# Memory\n${mem}`);
 	const crons = cronManager.list();
@@ -203,12 +193,21 @@ async function handleEvent(event: AgentEvent) {
 	await chat.typing(true);
 
 	try {
+		let compactionRetries = 3;
 		while (true) {
-			try {
-				const result = await memory.compactTail(compactionLlm);
-				if (result) compactionLog.info('emergency compaction', { tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter) });
-			} catch (e: any) {
-				compactionLog.error('emergency compaction failed', { error: e.message });
+			if (compactionRetries > 0) {
+				try {
+					const result = await memory.compactTail(compactionLlm);
+					if (result) {
+						compactionLog.info('emergency compaction', { tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter) });
+					} else {
+						compactionRetries = 0;
+					}
+				} catch (e: any) {
+					compactionRetries--;
+					compactionLog.error('emergency compaction failed', { error: e.message, retriesLeft: String(compactionRetries) });
+					if (compactionRetries === 0) compactionLog.error('emergency compaction exhausted, context may exceed budget');
+				}
 			}
 			const response = await llm.call(memory.getContext(), getSystem(), toolDefs);
 
