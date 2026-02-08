@@ -39,8 +39,6 @@
   Memory search, file search, web search.
   Semantic vs keyword. Embeddings.
 
-- [ ] **Prompt placeholders**
-  Replace placeholders in prompts at runtime, e.g. `{{APP_DIR}}` → `/app`, so paths like `{{APP_DIR}}/chat-public/` resolve correctly.
 
 - [ ] **Security audit**
 
@@ -52,6 +50,9 @@
 
 - [x] **Redact secrets**
   Redact secrets (API keys, tokens, credentials) from all tool results before storing in memory.
+
+- [x] **Prompt placeholders**
+  Replace placeholders in prompts at runtime, e.g. `{{APP_DIR}}` → `/app`.
 
 - [x] **File upload support**
   Handle file and image attachments in chat messages.
