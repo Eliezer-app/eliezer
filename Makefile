@@ -1,9 +1,10 @@
-.PHONY: dev dev-down shell logs stop clean test test-up test-down export export-html api-docs
+.PHONY: dev dev-stop shell logs stop clean test test-up test-down export export-html api-docs
 
-dev: test-down dev-down
+dev: test-down
 	docker compose up -d
+	docker compose restart eliezer
 
-dev-down:
+dev-stop:
 	docker compose down
 
 shell:
@@ -25,7 +26,7 @@ test-up:
 test-down:
 	docker compose -f docker-compose.test.yml down
 
-test: dev-down test-up
+test: dev-stop test-up
 	@npm test; ret=$$?; $(MAKE) test-down; exit $$ret
 
 export:

@@ -1,6 +1,16 @@
-# Widgets
+# Widgets and Apps
+
+You can create anything from a simple html widget to complex, full-feature, stateful and active applications.
+Follow the filesystem and framework structure described here to keep things clean.
+
+Start with picking name for your application.
+Place applications in `/opt/clawchat/apps/<app-name>`.
+Place ALL widgets in the correct path: `/opt/clawchat/apps/myapp/mywidget.html`.
+Any other path will not work. Widgets are not images, but they can reference images from `/opt/eliezer/chat-public/`.
 
 Widgets are interactive HTML/JS components embedded in chat messages.
+Widgets can be stateful if needed. Simple state persistence is provided by the framework.
+
 
 ## Inline Widget
 
@@ -12,9 +22,10 @@ Send HTML inside a ```widget``` code block:
 
 ## File-based Widget
 
-Write an HTML file to `/opt/clawchat/apps/`, then reference it:
+Write an HTML file to `/opt/clawchat/apps/<app-name>/widget1.html`,
+(example: `/opt/clawchat/apps/myapp/widget1.html`) then reference it:
 
-    ```widget:myapp/index.html
+    ```widget:myapp/widget1.html
     ```
 
 Path traversal (`..`) is blocked.
@@ -64,3 +75,5 @@ Widgets have a fullscreen button (opens in new tab). Detect with:
 ```css
 body.widget-fullscreen { height: 100%; }
 ```
+
+Note: curl/wget are not installed — use the wget tool to download files!

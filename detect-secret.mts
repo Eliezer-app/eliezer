@@ -70,7 +70,7 @@ const exclusions: RegExp[] = [
 	/^[A-Za-z0-9+/]*[+/=][A-Za-z0-9+/=]*$/,  // base64 (must contain +, /, or =)
 	/^0x[0-9a-fA-F]+$/,                      // hex literal
 	/^[a-zA-Z0-9_-]+\.[a-zA-Z]{2,}$/,       // domain-like (foo.com)
-	/^\/[\w/.-]+$/,                           // file path
+	/^[\w.-]+(?:\/[\w.-]+){2,}$/,              // file path (3+ segments, e.g. tmp/wget-x/file.db)
 	/^[a-zA-Z]+[^a-zA-Z]?$/,                 // single word with optional trailing punctuation
 	/^https?:\/\//,                           // URL
 	/^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9.-]+/,     // email or git remote (user@host)
@@ -139,7 +139,7 @@ export function redactSecrets(text: string, skipEntropy = false): string {
 
 	// Layer 2: suspicion scoring
 	if (!skipEntropy) {
-		result = result.replace(/[a-zA-Z0-9][^\s"]{11,}/g, (token) => {
+		result = result.replace(/[a-zA-Z0-9][^\s"'`]{11,}/g, (token) => {
 			const core = token.replace(/[^a-zA-Z0-9]+$/g, '');
 			if (suspicionScore(core) < SUSPICION_THRESHOLD) return token;
 			if (isExcluded(core)) return token;

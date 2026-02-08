@@ -25,7 +25,7 @@ export abstract class LLMBase {
 	tokenLimit: number;
 	protected timeoutMs: number;
 
-	constructor(tokenLimit = 500_000, timeoutMs = 120_000) {
+	constructor(tokenLimit = 500_000, timeoutMs = 240_000) {
 		this.tokenLimit = tokenLimit;
 		this.timeoutMs = timeoutMs;
 	}

@@ -45,7 +45,7 @@ const compactionLlm = createLLM({
 	apiKey: process.env.COMPACTION_LLM_API_KEY || LLM_API_KEY,
 	model: process.env.COMPACTION_LLM_MODEL || LLM_MODEL,
 	baseUrl: process.env.COMPACTION_LLM_BASE_URL || LLM_BASE_URL,
-	timeoutMs: 120_000,
+	timeoutMs: 240_000,
 });
 const chat = new ChatClient(CHAT_URL);
 const cronManager = new CronManager(db);
@@ -93,6 +93,7 @@ function getSystem(): string {
 
 const startTime = Date.now();
 let currentEvent: { source: string; type: string } | null = null;
+let abortController: AbortController | null = null;
 
 startServer({
 	port: parseInt(AGENT_PORT),
@@ -111,6 +112,11 @@ startServer({
 	},
 	listCrons: () => cronManager.list(),
 	setCronEnabled: (name, enabled) => cronManager.setEnabled(name, enabled),
+	stop: () => {
+		if (!abortController) return false;
+		abortController.abort();
+		return true;
+	},
 });
 
 const compactionLog = log.with({ module: 'Compaction' });
@@ -166,18 +172,20 @@ while (true) {
 	}
 
 	currentEvent = { source: event.source, type: event.type };
+	abortController = new AbortController();
 	try {
-		await handleEvent(event);
+		await handleEvent(event, abortController.signal);
 	} catch (e: any) {
 		log.error('event failed', { source: event.source, type: event.type, error: e.message });
 		try { await chat.send('default', `Error: ${e.message}`); } catch (ce: any) {
 			log.error('chat send failed', { error: ce.message });
 		}
 	}
+	abortController = null;
 	queue.done(event.id);
 }
 
-async function handleEvent(event: AgentEvent) {
+async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 	log.info('handling event', { source: event.source, type: event.type });
 
 	const payload = event.payload as any;
@@ -195,6 +203,12 @@ async function handleEvent(event: AgentEvent) {
 	try {
 		let compactionRetries = 3;
 		while (true) {
+			if (signal.aborted) {
+				log.info('event processing stopped by user');
+				await chat.typing(false);
+				await chat.send('default', '(stopped)').catch(() => {});
+				break;
+			}
 			if (compactionRetries > 0) {
 				try {
 					const result = await memory.compactTail(compactionLlm);
@@ -246,6 +260,7 @@ async function handleEvent(event: AgentEvent) {
 			let shouldBreak = false;
 
 			for (const tu of toolUses) {
+				if (signal.aborted) { shouldBreak = true; break; }
 				const tool = tools.find(t => t.name === tu.name);
 				if (!tool) {
 					results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool: ${tu.name}` });
@@ -253,7 +268,7 @@ async function handleEvent(event: AgentEvent) {
 				}
 				log.info(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
 				await chat.send('default', JSON.stringify({ tool: tu.name, input: tu.input }), 'tool_call').catch((e: any) => log.error('chat send tool_call', { tool: tu.name, error: e.message }));
-				let { content, isError, signal, skipSecretRedaction } = await tool.call(tu.input);
+				let { content, isError, signal: toolSignal, skipSecretRedaction } = await tool.call(tu.input);
 				if (content.length > TOOL_OUTPUT_MAX_CHARS) {
 					const preview = content.slice(0, TOOL_OUTPUT_PREVIEW_CHARS);
 					const size = content.length >= 1000 ? Math.round(content.length / 1000) + 'k' : String(content.length);
@@ -264,7 +279,7 @@ async function handleEvent(event: AgentEvent) {
 				log.info(`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
 				await chat.send('default', JSON.stringify({ tool: tu.name, result: content, isError }), 'tool_result').catch((e: any) => log.error('chat send tool_result', { tool: tu.name, error: e.message }));
 				results.push({ type: 'tool_result', tool_use_id: tu.id, content });
-				if (signal === 'restart') { shouldBreak = true; break; }
+				if (toolSignal === 'restart') { shouldBreak = true; break; }
 			}
 
 			memory.add('user', results);

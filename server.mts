@@ -12,10 +12,11 @@ export interface ServerDeps {
 	getMemory: () => Record<string, unknown>;
 	listCrons: () => CronRow[];
 	setCronEnabled: (name: string, enabled: boolean) => boolean;
+	stop: () => boolean;
 }
 
 export function startServer(deps: ServerDeps) {
-	const { port, queue, log, getHealth, getState, getMemory, listCrons, setCronEnabled } = deps;
+	const { port, queue, log, getHealth, getState, getMemory, listCrons, setCronEnabled, stop } = deps;
 
 	const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
 		// GET /info/health — Liveness check. No DB queries.
@@ -108,6 +109,16 @@ export function startServer(deps: ServerDeps) {
 		//   Error (400):
 		//     ok       boolean — false
 		//     error    string  — error message
+		// POST /stop — Abort the current event processing loop.
+		//   Response:
+		//     ok       boolean — true if an event was being processed
+		if (req.method === 'POST' && req.url === '/stop') {
+			const stopped = stop();
+			log.info('stop requested', { wasProcessing: stopped });
+			json(res, 200, { ok: stopped });
+			return;
+		}
+
 		if (req.method === 'POST' && req.url === '/events') {
 			try {
 				const body = JSON.parse(await readBody(req));

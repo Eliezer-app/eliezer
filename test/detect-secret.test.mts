@@ -111,6 +111,12 @@ MIIEvQIBADANBg
 			expect(redactSecrets(json)).toBe(json);
 		});
 
+		it('excludes code with single-quoted paths', () => {
+			expect(redactSecrets("fs.statSync('/app/northwind.db').size")).toBe("fs.statSync('/app/northwind.db').size");
+			expect(redactSecrets("https.get('https://github.com/user/repo/raw/main/file.db', (res) => {"))
+				.toBe("https.get('https://github.com/user/repo/raw/main/file.db', (res) => {");
+		});
+
 		it('excludes file paths', () => {
 			expect(redactSecrets('/usr/local/bin/node')).toBe('/usr/local/bin/node');
 		});
