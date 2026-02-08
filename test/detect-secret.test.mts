@@ -101,6 +101,16 @@ MIIEvQIBADANBg
 			expect(redactSecrets('550e8400-e29b-41d4-a716-446655440000')).toBe('550e8400-e29b-41d4-a716-446655440000');
 		});
 
+		it('excludes UUIDs with surrounding punctuation', () => {
+			expect(redactSecrets('53bd7dda-b8c4-4bf2-a5af-93ebf5064dbd}')).toBe('53bd7dda-b8c4-4bf2-a5af-93ebf5064dbd}');
+			expect(redactSecrets('<53bd7dda-b8c4-4bf2-a5af-93ebf5064dbd>')).toBe('<53bd7dda-b8c4-4bf2-a5af-93ebf5064dbd>');
+		});
+
+		it('excludes UUIDs in compact JSON', () => {
+			const json = '{"messageId":"53bd7dda-b8c4-4bf2-a5af-93ebf5064dbd"}';
+			expect(redactSecrets(json)).toBe(json);
+		});
+
 		it('excludes file paths', () => {
 			expect(redactSecrets('/usr/local/bin/node')).toBe('/usr/local/bin/node');
 		});

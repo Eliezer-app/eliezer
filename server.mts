@@ -84,9 +84,24 @@ export function startServer(deps: ServerDeps) {
 
 		// POST /events — Event ingestion.
 		//   Request body:
-		//     source   string  — event origin (e.g. "chat")
-		//     type     string  — event type (e.g. "user_message", "message_deleted")
-		//     payload  object  — event-specific data
+		//     source     string  — event origin (e.g. "chat")
+		//     type       string  — event type
+		//     payload    object  — event-specific data (see below)
+		//     timestamp  string  — ISO 8601 timestamp
+		//   Event types:
+		//     user_message     — new message from user
+		//       payload.conversationId  string  — conversation ID
+		//       payload.messageId       string  — chat message ID (used to link agent reply)
+		//       payload.content         string  — message text
+		//       payload.attachment      object? — file attachment (optional)
+		//         attachment.filename   string  — original filename
+		//         attachment.mimetype   string  — MIME type (e.g. "image/jpeg")
+		//         attachment.size       number  — file size in bytes
+		//     message_updated  — user edited a message (ignored, housekeeping)
+		//       payload.messageId  string
+		//     message_deleted  — user deleted a message
+		//       payload.messageId  string  — removes matching entry from agent memory
+		//     typing           — user typing indicator (ignored, housekeeping)
 		//   Response:
 		//     ok       boolean — true on success
 		//     eventId  number  — assigned queue ID

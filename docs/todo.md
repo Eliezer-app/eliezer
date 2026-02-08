@@ -1,8 +1,8 @@
 # TODO
 
-- [ ] **File/audio support**
-  Handle file and audio attachments in chat messages.
-  Pass to LLM as multimodal content.
+- [ ] **Audio transcription**
+  Transcribe audio attachments via Groq Whisper API (fast, cheap, OpenAI-compatible).
+  Pass transcript to LLM as text content.
 
 - [ ] **App/widget development**
   Integrate app and widget development into the agent workflow.
@@ -52,3 +52,7 @@
 
 - [x] **Redact secrets**
   Redact secrets (API keys, tokens, credentials) from all tool results before storing in memory.
+
+- [x] **File upload support**
+  Handle file and image attachments in chat messages.
+  Pass to LLM as multimodal content.

@@ -64,7 +64,7 @@ export function createChatTool(client: ChatClient): Tool {
 					default:
 						return { content: `Unknown action: ${input.action}`, isError: true };
 				}
-				return { content: JSON.stringify(result), isError: false };
+				return { content: JSON.stringify(result), isError: false, skipSecretRedaction: true };
 			} catch (e: any) {
 				return { content: e.message, isError: true };
 			}
