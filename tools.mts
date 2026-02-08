@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { exec, execSync } from 'child_process';
 import { readFileSync, writeFileSync, mkdirSync, createWriteStream, mkdtempSync, statSync } from 'fs';
 import { pipeline } from 'stream/promises';
 import { tmpdir } from 'os';
@@ -15,7 +15,7 @@ export interface ToolResult {
 }
 
 export interface Tool extends ToolDef {
-	call(input: Record<string, any>): Promise<ToolResult>;
+	call(input: Record<string, any>, signal?: AbortSignal): Promise<ToolResult>;
 }
 
 function safe(fn: () => string): ToolResult {
@@ -39,7 +39,16 @@ export function createTools(): Tool[] {
 				properties: { command: { type: 'string', description: 'The shell command to execute' } },
 				required: ['command'],
 			},
-			call: async ({ command }) => safe(() => execSync(command, { encoding: 'utf-8', timeout: 30_000 })),
+			call: async ({ command }, signal) => {
+				return new Promise(resolve => {
+					const child = exec(command, { encoding: 'utf-8', timeout: 30_000 }, (err, stdout, stderr) => {
+						if (signal?.aborted) resolve({ content: 'aborted', isError: true });
+						else if (err) resolve({ content: err.message, isError: true });
+						else resolve({ content: stdout || stderr, isError: false });
+					});
+					signal?.addEventListener('abort', () => child.kill(), { once: true });
+				});
+			},
 		},
 		{
 			name: 'read',
@@ -115,12 +124,14 @@ export function createTools(): Tool[] {
 				},
 				required: ['url'],
 			},
-			call: async ({ url }) => {
+			call: async ({ url }, signal) => {
 				const MAX_SIZE = 100 * 1024 * 1024; // 100MB
 				try {
+					const signals = [AbortSignal.timeout(60_000)];
+					if (signal) signals.push(signal);
 					const res = await fetch(url, {
 						redirect: 'follow',
-						signal: AbortSignal.timeout(60_000),
+						signal: AbortSignal.any(signals),
 					});
 					if (!res.ok) return { content: `HTTP ${res.status} ${res.statusText}`, isError: true };
 					if (!res.body) return { content: 'No response body', isError: true };

@@ -178,6 +178,7 @@ while (true) {
 	} catch (e: any) {
 		if (e.name === 'AbortError') {
 			log.info('event aborted by user', { source: event.source, type: event.type });
+			memory.add('user', '[user stopped agent execution]');
 			await chat.send('default', '(stopped)').catch(() => {});
 		} else {
 			log.error('event failed', { source: event.source, type: event.type, error: e.message });
@@ -210,6 +211,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 		while (true) {
 			if (signal.aborted) {
 				log.info('event processing stopped by user');
+				memory.add('user', '[user stopped agent execution]');
 				await chat.typing(false);
 				await chat.send('default', '(stopped)').catch(() => {});
 				break;
@@ -273,7 +275,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 				}
 				log.info(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
 				await chat.send('default', JSON.stringify({ tool: tu.name, input: tu.input }), 'tool_call').catch((e: any) => log.error('chat send tool_call', { tool: tu.name, error: e.message }));
-				let { content, isError, signal: toolSignal, skipSecretRedaction } = await tool.call(tu.input);
+				let { content, isError, signal: toolSignal, skipSecretRedaction } = await tool.call(tu.input, signal);
 				if (content.length > TOOL_OUTPUT_MAX_CHARS) {
 					const preview = content.slice(0, TOOL_OUTPUT_PREVIEW_CHARS);
 					const size = content.length >= 1000 ? Math.round(content.length / 1000) + 'k' : String(content.length);
@@ -289,6 +291,10 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 
 			memory.add('user', results);
 			if (shouldBreak) {
+				if (signal.aborted) {
+					memory.add('user', '[user stopped agent execution]');
+					await chat.send('default', '(stopped)').catch(() => {});
+				}
 				await chat.typing(false);
 				break;
 			}
