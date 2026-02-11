@@ -3,7 +3,6 @@ import { readFileSync, writeFileSync, mkdirSync, createWriteStream, mkdtempSync,
 import { pipeline } from 'stream/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import Database from 'better-sqlite3';
 import { ToolDef, LLMBase } from './llm.mts';
 import { CronManager } from './cron.mts';
 import { SearchProvider, fenceResults } from './search.mts';
@@ -266,62 +265,6 @@ export function createTools(vettingLlm?: LLMBase): Tool[] {
 	];
 }
 
-export function createSearchHistoryTool(db: Database.Database): Tool {
-	return {
-		name: 'search_message_history',
-		description: 'Search past conversation history. All parts must match (AND). Searches raw content and compacted summaries across all messages, including archived.',
-		input_schema: {
-			type: 'object',
-			properties: {
-				parts: { type: 'array', items: { type: 'string' }, description: 'Search terms — all must match' },
-				limit: { type: 'number', description: 'Max results (default: 10)' },
-			},
-			required: ['parts'],
-		},
-		async call({ parts, limit }): Promise<ToolResult> {
-			if (!parts.length) return { content: 'No search terms provided', isError: true };
-			const maxResults = limit ?? 10;
-
-			// Search raw messages
-			const msgConditions = parts.map(() => "content LIKE ?").join(' AND ');
-			const msgParams = parts.map(p => `%${p}%`);
-			const msgRows = db.prepare(
-				`SELECT role, content, created_at FROM messages
-				 WHERE ${msgConditions}
-				 ORDER BY rowid DESC LIMIT ?`
-			).all(...msgParams, maxResults) as Array<{
-				role: string; content: string; created_at: number;
-			}>;
-
-			// Search compacted summaries
-			const cmpConditions = parts.map(() => "summary LIKE ?").join(' AND ');
-			const cmpParams = parts.map(p => `%${p}%`);
-			const cmpRows = db.prepare(
-				`SELECT role, summary, created_at FROM compacted
-				 WHERE ${cmpConditions}
-				 ORDER BY id DESC LIMIT ?`
-			).all(...cmpParams, maxResults) as Array<{
-				role: string; summary: string; created_at: number;
-			}>;
-
-			if (!msgRows.length && !cmpRows.length) return { content: `No messages matching [${parts.join(', ')}]`, isError: false };
-
-			const results: string[] = [];
-			for (const r of msgRows) {
-				const ts = new Date(r.created_at * 1000).toISOString().slice(0, 16);
-				const snippet = extractSnippet(r.content, parts[0], 200);
-				results.push(`[${ts}] ${r.role}: ${snippet}`);
-			}
-			for (const r of cmpRows) {
-				const ts = new Date(r.created_at * 1000).toISOString().slice(0, 16);
-				results.push(`[${ts}] ${r.role} (summary): ${r.summary.slice(0, 200)}`);
-			}
-
-			return { content: `${results.length} result(s):\n\n${results.join('\n\n')}`, isError: false };
-		},
-	};
-}
-
 export function createScheduleTool(cronManager: CronManager): Tool {
 	return {
 		name: 'schedule',
@@ -392,12 +335,3 @@ export function createWebSearchTool(provider: SearchProvider, vettingLlm?: LLMBa
 	};
 }
 
-function extractSnippet(content: string, query: string, maxLen: number): string {
-	const idx = content.toLowerCase().indexOf(query.toLowerCase());
-	if (idx === -1) return content.slice(0, maxLen);
-	const start = Math.max(0, idx - 80);
-	const end = Math.min(content.length, idx + query.length + 80);
-	const prefix = start > 0 ? '...' : '';
-	const suffix = end < content.length ? '...' : '';
-	return prefix + content.slice(start, end) + suffix;
-}
