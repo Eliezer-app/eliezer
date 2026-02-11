@@ -72,6 +72,8 @@ const exclusions: RegExp[] = [
 	/^[a-zA-Z0-9_-]+\.[a-zA-Z]{2,}$/,       // domain-like (foo.com)
 	/^[\w.-]+(?:\/[\w.-]+){2,}$/,              // file path (3+ segments, e.g. tmp/wget-x/file.db)
 	/^[a-zA-Z]+[^a-zA-Z]?$/,                 // single word with optional trailing punctuation
+	/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/,        // ISO 8601 timestamp
+	/^ts=\d{4}-\d{2}-\d{2}T/,                // structured log timestamp (ts=...)
 	/^https?:\/\//,                           // URL
 	/^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9.-]+/,     // email or git remote (user@host)
 	/^[a-zA-Z][\w-]*:[a-zA-Z#]/,            // key:Value or key:#hex style

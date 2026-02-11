@@ -43,7 +43,6 @@ export function startServer(deps: ServerDeps) {
 		//   context.memory.pct         number       — percentage of budget
 		//   context.compacted.tokens         number       — tokens used by compressed history summaries
 		//   context.compacted.pct            number       — percentage of budget
-		//   context.compacted.originalTokens number       — original uncompacted token size
 		//   context.compacted.groups   number       — number of compressed groups
 		//   context.flow.tokens        number       — tokens used by uncompressed messages
 		//   context.flow.pct           number       — percentage of budget

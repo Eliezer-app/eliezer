@@ -28,27 +28,20 @@ const result = await compressGroups(db, toCompress, llm, PROMPTS_DIR, process.en
 console.log(`Result: ${result.anchors} anchors, ${result.messages} messages, ${result.tokensBefore} → ${result.tokensAfter} tokens (${(result.tokensAfter / result.tokensBefore * 100).toFixed(1)}%)\n`);
 
 // --- read results from DB ---
-const rows = db.prepare(
-	`SELECT rowid, role, context_content, created_at FROM messages
-	 WHERE rowid >= ? AND rowid <= ? ORDER BY rowid`,
-).all(allMessages[0].rowid, allMessages[allMessages.length - 1].rowid) as
-	Array<{ rowid: number; role: string; context_content: string | null; created_at: number }>;
+import { getCompactedSummaries } from '../compaction.mts';
+const summaries = getCompactedSummaries(db);
 
 console.log('='.repeat(80));
-console.log('ANCHOR MAP (from DB)');
+console.log('COMPACTED SUMMARIES');
 console.log('='.repeat(80));
 
-let anchors = 0;
-let skipped = 0;
-for (const r of rows) {
-	if (r.context_content === null) continue; // untouched (shouldn't happen)
-	if (r.context_content === '') { skipped++; continue; }
-	anchors++;
-	const ts = new Date(r.created_at * 1000).toISOString().slice(0, 19);
-	const role = r.role === 'assistant' ? 'agent' : 'user';
-	console.log(`\n[${role}] rowid=${r.rowid} time=${ts}`);
-	console.log(`  ${r.context_content}`);
+for (const s of summaries) {
+	const ts = new Date(s.created_at * 1000).toISOString().slice(0, 19);
+	const role = s.role === 'assistant' ? 'agent' : 'user';
+	console.log(`\n[${role}] time=${ts}`);
+	console.log(`  ${s.summary}`);
 }
 
+const archivedCount = (db.prepare('SELECT count(*) as count FROM messages WHERE archived').get() as { count: number }).count;
 console.log('\n' + '='.repeat(80));
-console.log(`${anchors} anchors, ${skipped} skipped, ${anchors + skipped}/${allMessages.length} messages processed`);
+console.log(`${summaries.length} summaries, ${archivedCount}/${allMessages.length} messages archived`);

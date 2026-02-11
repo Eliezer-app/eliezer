@@ -281,26 +281,43 @@ export function createSearchHistoryTool(db: Database.Database): Tool {
 		async call({ parts, limit }): Promise<ToolResult> {
 			if (!parts.length) return { content: 'No search terms provided', isError: true };
 			const maxResults = limit ?? 10;
-			const conditions = parts.map(() => "(content LIKE ? OR context_content LIKE ?)").join(' AND ');
-			const params = parts.flatMap(p => [`%${p}%`, `%${p}%`]);
-			const rows = db.prepare(
-				`SELECT role, content, context_content, created_at FROM messages
-				 WHERE ${conditions}
+
+			// Search raw messages
+			const msgConditions = parts.map(() => "content LIKE ?").join(' AND ');
+			const msgParams = parts.map(p => `%${p}%`);
+			const msgRows = db.prepare(
+				`SELECT role, content, created_at FROM messages
+				 WHERE ${msgConditions}
 				 ORDER BY rowid DESC LIMIT ?`
-			).all(...params, maxResults) as Array<{
-				role: string; content: string; context_content: string | null; created_at: number;
+			).all(...msgParams, maxResults) as Array<{
+				role: string; content: string; created_at: number;
 			}>;
 
-			if (!rows.length) return { content: `No messages matching [${parts.join(', ')}]`, isError: false };
+			// Search compacted summaries
+			const cmpConditions = parts.map(() => "summary LIKE ?").join(' AND ');
+			const cmpParams = parts.map(p => `%${p}%`);
+			const cmpRows = db.prepare(
+				`SELECT role, summary, created_at FROM compacted
+				 WHERE ${cmpConditions}
+				 ORDER BY id DESC LIMIT ?`
+			).all(...cmpParams, maxResults) as Array<{
+				role: string; summary: string; created_at: number;
+			}>;
 
-			const results = rows.map(r => {
+			if (!msgRows.length && !cmpRows.length) return { content: `No messages matching [${parts.join(', ')}]`, isError: false };
+
+			const results: string[] = [];
+			for (const r of msgRows) {
 				const ts = new Date(r.created_at * 1000).toISOString().slice(0, 16);
 				const snippet = extractSnippet(r.content, parts[0], 200);
-				const summary = r.context_content && r.context_content !== '' ? `\n  Summary: ${r.context_content.slice(0, 200)}` : '';
-				return `[${ts}] ${r.role}: ${snippet}${summary}`;
-			}).join('\n\n');
+				results.push(`[${ts}] ${r.role}: ${snippet}`);
+			}
+			for (const r of cmpRows) {
+				const ts = new Date(r.created_at * 1000).toISOString().slice(0, 16);
+				results.push(`[${ts}] ${r.role} (summary): ${r.summary.slice(0, 200)}`);
+			}
 
-			return { content: `${rows.length} result(s):\n\n${results}`, isError: false };
+			return { content: `${results.length} result(s):\n\n${results.join('\n\n')}`, isError: false };
 		},
 	};
 }

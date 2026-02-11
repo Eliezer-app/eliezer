@@ -1,6 +1,12 @@
 import Database from 'better-sqlite3';
 import { readFileSync, writeFileSync } from 'fs';
+import { encoding_for_model } from 'tiktoken';
 import { LLMBase } from './llm.mts';
+import { Logger } from './log.mts';
+
+const enc = encoding_for_model('gpt-4o');
+
+const log = new Logger({ module: 'Compaction' });
 
 export interface MessageRow {
 	rowid: number;
@@ -8,8 +14,7 @@ export interface MessageRow {
 	role: string;
 	content: string;
 	created_at: number;
-	context_content: string | null;
-	archived_at: string | null;
+	archived: number;
 }
 
 /**
@@ -42,12 +47,22 @@ export interface Group {
 }
 
 /**
- * Detect groups of related messages by time gaps.
+ * Detect groups of unarchived messages by time gaps.
  * A gap > gapSeconds between consecutive messages starts a new group.
  */
-export function identifyGroups(db: Database.Database, gapSeconds: number): Group[] {
+function hasToolResult(content: string): boolean {
+	try {
+		const parsed = JSON.parse(content);
+		if (Array.isArray(parsed)) return parsed.some((b: any) => b.type === 'tool_result');
+	} catch {}
+	return false;
+}
+
+export function identifyGroups(db: Database.Database, gapSeconds: number, includeArchived = false): Group[] {
 	const rows = db.prepare(
-		'SELECT rowid, chat_message_id, role, content, created_at, context_content, archived_at FROM messages ORDER BY rowid'
+		includeArchived
+			? 'SELECT rowid, chat_message_id, role, content, created_at, archived FROM messages ORDER BY rowid'
+			: 'SELECT rowid, chat_message_id, role, content, created_at, archived FROM messages WHERE NOT archived ORDER BY rowid'
 	).all() as MessageRow[];
 
 	if (!rows.length) return [];
@@ -56,7 +71,9 @@ export function identifyGroups(db: Database.Database, gapSeconds: number): Group
 	let current: MessageRow[] = [rows[0]];
 
 	for (let i = 1; i < rows.length; i++) {
-		if (rows[i].created_at - rows[i - 1].created_at > gapSeconds) {
+		const gap = rows[i].created_at - rows[i - 1].created_at > gapSeconds;
+		const isToolResult = hasToolResult(rows[i].content);
+		if (gap && !isToolResult) {
 			groups.push({ start: current[0].rowid, end: current[current.length - 1].rowid, messages: current });
 			current = [];
 		}
@@ -68,24 +85,21 @@ export function identifyGroups(db: Database.Database, gapSeconds: number): Group
 }
 
 /**
- * Estimate token count from text (~4 chars per token).
+ * Count tokens using tiktoken (cl200k_base, GPT-4o encoding).
  */
 export function estimateTokens(text: string): number {
-	return Math.ceil(text.length / 4);
+	return enc.encode(text).length;
 }
 
-function anchoringInstructions(messageCount: number): string {
+function compactionInstructions(messageCount: number): string {
 	const lo = Math.max(3, Math.round(messageCount / 20));
 	const hi = Math.max(lo + 2, Math.round(messageCount / 6));
 	return `
 
 CRITICAL: You MUST output ONLY a valid JSON array. No prose, no markdown, no explanation.
 
-Each entry anchors to a database message by timestamp and role. All messages
-from the previous anchor up to this one will be replaced by your summary.
-
-You decide the granularity. Group related exchanges into one summary when they
-share a topic. Split when the topic changes.
+Each entry summarizes a stretch of conversation. You decide the granularity.
+Group related exchanges into one summary when they share a topic. Split when the topic changes.
 
 {"entries": [
   {"time":"2025-05-14T10:32","role":"agent","summary":"Read config.mts, edited DB init to add migration"},
@@ -127,27 +141,6 @@ function parseSummaryEntries(text: string, fallbackTime: string): SummaryEntry[]
 }
 
 /**
- * Find the message closest to a timestamp with matching role.
- * Falls back to nearest message of any role if no role match found.
- */
-function findAnchorMessage(timeStr: string, role: string, messages: MessageRow[]): MessageRow {
-	// Handle offset-aware (2026-02-06T08:46-08:00), UTC (2025-05-14T10:32:00Z), or bare (2025-05-14T10:32)
-	const hasOffset = /[+-]\d{2}:\d{2}$/.test(timeStr) || timeStr.endsWith('Z');
-	const target = Math.floor(new Date(hasOffset ? timeStr : timeStr + 'Z').getTime() / 1000);
-	const dbRole = role === 'user' ? 'user' : 'assistant';
-	let bestWithRole: MessageRow | null = null;
-	let bestWithRoleDist = Infinity;
-	let bestAny = messages[messages.length - 1];
-	let bestAnyDist = Infinity;
-	for (const m of messages) {
-		const dist = Math.abs(m.created_at - target);
-		if (m.role === dbRole && dist < bestWithRoleDist) { bestWithRole = m; bestWithRoleDist = dist; }
-		if (dist < bestAnyDist) { bestAny = m; bestAnyDist = dist; }
-	}
-	return bestWithRole ?? bestAny;
-}
-
-/**
  * Format messages for the compaction LLM.
  */
 function formatMessages(messages: MessageRow[]): string {
@@ -168,13 +161,22 @@ function buildCompactionSystemPrompt(promptsDir: string, priorContext?: string):
 }
 
 /**
+ * Parse a timestamp from LLM output into epoch seconds.
+ */
+function parseTimestamp(timeStr: string): number {
+	const hasOffset = /[+-]\d{2}:\d{2}$/.test(timeStr) || timeStr.endsWith('Z');
+	return Math.floor(new Date(hasOffset ? timeStr : timeStr + 'Z').getTime() / 1000);
+}
+
+/**
  * Call compaction LLM and parse structured entries.
  * Format instructions go in the user message (not system) so models like Kimi K2.5 can't ignore them.
  */
 async function callCompactionLLM(messages: MessageRow[], llm: LLMBase, promptsDir: string, timezone: string, priorContext?: string): Promise<SummaryEntry[]> {
-	const formatted = formatMessages(messages, timezone);
+	const formatted = formatMessages(messages);
 	const system = buildCompactionSystemPrompt(promptsDir, priorContext);
-	const userContent = formatted + '\n\n' + anchoringInstructions(messages.length);
+	const userContent = formatted + '\n\n' + compactionInstructions(messages.length);
+	log.debug('calling LLM', { messages: String(messages.length), chars: String(userContent.length) });
 	const response = await llm.call([{ role: 'user', content: userContent }], system, [], undefined, true);
 	const text = response.content
 		.filter(b => b.type === 'text')
@@ -185,35 +187,24 @@ async function callCompactionLLM(messages: MessageRow[], llm: LLMBase, promptsDi
 }
 
 /**
- * Write anchored summaries to DB. Each entry anchors to the nearest message;
- * all messages between anchors get context_content = '' (skipped).
+ * Write compaction results: INSERT summaries into compacted table, archive source messages.
  */
-function writeAnchors(db: Database.Database, messages: MessageRow[], entries: SummaryEntry[]): number {
-	// Resolve anchors and sort by rowid
-	const anchors = entries
-		.map(e => ({ entry: e, anchor: findAnchorMessage(e.time, e.role, messages) }))
-		.sort((a, b) => a.anchor.rowid - b.anchor.rowid);
-
-	// Deduplicate: if two entries resolve to the same message, merge summaries
-	const deduped: typeof anchors = [];
-	for (const a of anchors) {
-		const prev = deduped[deduped.length - 1];
-		if (prev && prev.anchor.rowid === a.anchor.rowid) {
-			prev.entry = { ...prev.entry, summary: prev.entry.summary + '\n' + a.entry.summary };
-		} else {
-			deduped.push(a);
-		}
-	}
-
+function writeCompacted(db: Database.Database, messages: MessageRow[], entries: SummaryEntry[]): number {
 	const tx = db.transaction(() => {
-		const skip = db.prepare("UPDATE messages SET context_content = '' WHERE rowid = ?");
-		const setAnchor = db.prepare('UPDATE messages SET context_content = ? WHERE rowid = ?');
-		for (const m of messages) skip.run(m.rowid);
-		for (const { entry, anchor } of deduped) setAnchor.run(entry.summary, anchor.rowid);
+		const insertStmt = db.prepare(
+			'INSERT INTO compacted (role, summary, created_at) VALUES (?, ?, ?)'
+		);
+		for (const e of entries) {
+			const role = e.role === 'user' ? 'user' : 'assistant';
+			insertStmt.run(role, e.summary, parseTimestamp(e.time));
+		}
+		db.prepare(
+			'UPDATE messages SET archived = 1 WHERE rowid BETWEEN ? AND ?'
+		).run(messages[0].rowid, messages[messages.length - 1].rowid);
 	});
 	tx();
-
-	return deduped.length;
+	log.debug('wrote compacted', { entries: String(entries.length), archived: String(messages.length) });
+	return entries.length;
 }
 
 export interface CompactionResult {
@@ -232,7 +223,7 @@ export async function compressGroup(db: Database.Database, group: Group, llm: LL
 	const entries = await callCompactionLLM(group.messages, llm, promptsDir, timezone, priorContext);
 	const tokensAfter = entries.reduce((sum, e) => sum + estimateTokens(e.summary), 0);
 
-	const anchors = writeAnchors(db, group.messages, entries);
+	const anchors = writeCompacted(db, group.messages, entries);
 	db.prepare(
 		'INSERT INTO compaction_log (op, group_start, group_end, tokens_before, tokens_after) VALUES (?, ?, ?, ?, ?)'
 	).run('compress', group.start, group.end, tokensBefore, tokensAfter);
@@ -240,34 +231,38 @@ export async function compressGroup(db: Database.Database, group: Group, llm: LL
 	return { tokensBefore, tokensAfter, groups: 1, messages: group.messages.length, anchors };
 }
 
-const BATCH_SIZE = 100;
+export const BATCH_CHARS = 400_000;
 
 /**
- * Compress multiple groups, batched to ~BATCH_SIZE messages per LLM call.
+ * Compress multiple groups, batched by total content size.
  * Cuts at group boundaries so no group is split.
  */
 export async function compressGroups(db: Database.Database, groups: Group[], llm: LLMBase, promptsDir: string, timezone: string): Promise<CompactionResult> {
 	const batches: Group[][] = [];
 	let current: Group[] = [];
-	let count = 0;
+	let chars = 0;
 	for (const g of groups) {
-		if (count > 0 && count + g.messages.length > BATCH_SIZE) {
+		const groupChars = g.messages.reduce((sum, m) => sum + m.content.length, 0);
+		if (chars > 0 && chars + groupChars > BATCH_CHARS) {
 			batches.push(current);
 			current = [];
-			count = 0;
+			chars = 0;
 		}
 		current.push(g);
-		count += g.messages.length;
+		chars += groupChars;
 	}
 	if (current.length) batches.push(current);
 
+	log.debug('compressing', { batches: String(batches.length), groups: String(groups.length) });
 	let totalTokensBefore = 0, totalTokensAfter = 0, totalAnchors = 0, totalMessages = 0;
-	for (const batch of batches) {
+	for (let i = 0; i < batches.length; i++) {
+		const batch = batches[i];
 		const msgs = batch.flatMap(g => g.messages);
 		const tokensBefore = msgs.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+		log.debug('batch', { batch: `${i + 1}/${batches.length}`, messages: String(msgs.length), tokens: String(tokensBefore) });
 		const entries = await callCompactionLLM(msgs, llm, promptsDir, timezone);
 		const tokensAfter = entries.reduce((sum, e) => sum + estimateTokens(e.summary), 0);
-		const anchors = writeAnchors(db, msgs, entries);
+		const anchors = writeCompacted(db, msgs, entries);
 		db.prepare(
 			'INSERT INTO compaction_log (op, group_start, group_end, tokens_before, tokens_after) VALUES (?, ?, ?, ?, ?)'
 		).run('compress', batch[0].start, batch[batch.length - 1].end, tokensBefore, tokensAfter);
@@ -286,6 +281,7 @@ export async function compressGroups(db: Database.Database, groups: Group[], llm
 export async function distillToMemory(
 	db: Database.Database, llm: LLMBase, memoryPath: string, summaries: string[],
 ): Promise<void> {
+	log.debug('distilling', { summaries: String(summaries.length) });
 	let currentMemory = '';
 	try { currentMemory = readFileSync(memoryPath, 'utf-8'); } catch {}
 
@@ -322,42 +318,20 @@ Output the updated memory.md content. Keep it well-organized.`,
 }
 
 /**
- * Archive compacted groups that have been distilled into memory.md.
- */
-export function archiveGroups(db: Database.Database, groups: Group[]): void {
-	const tx = db.transaction(() => {
-		const stmt = db.prepare("UPDATE messages SET archived_at = datetime('now') WHERE rowid = ?");
-		for (const g of groups) {
-			for (const m of g.messages) {
-				stmt.run(m.rowid);
-			}
-		}
-		if (groups.length) {
-			db.prepare(
-				'INSERT INTO compaction_log (op, group_start, group_end) VALUES (?, ?, ?)'
-			).run('archive', groups[0].start, groups[groups.length - 1].end);
-		}
-	});
-	tx();
-}
-
-/**
- * Get all compacted (non-archived) summaries with their roles.
+ * Get all compacted (non-archived) summaries.
  */
 export function getCompactedSummaries(db: Database.Database): Array<{ role: string; summary: string; created_at: number }> {
 	return db.prepare(
-		"SELECT role, context_content as summary, created_at FROM messages WHERE context_content IS NOT NULL AND context_content != '' AND archived_at IS NULL ORDER BY rowid"
+		'SELECT role, summary, created_at FROM compacted WHERE NOT archived ORDER BY id'
 	).all() as Array<{ role: string; summary: string; created_at: number }>;
 }
 
 /**
  * Get uncompressed groups (eligible for compression).
- * Only returns groups where all messages have context_content IS NULL.
+ * identifyGroups already filters to unarchived messages.
  */
 export function getUncompressedGroups(db: Database.Database, gapSeconds: number): Group[] {
-	return identifyGroups(db, gapSeconds).filter(g =>
-		g.messages.every(m => m.context_content === null && m.archived_at === null)
-	);
+	return identifyGroups(db, gapSeconds);
 }
 
 /**
@@ -395,25 +369,29 @@ function formatForSummary(content: string, role: string, ts: string): Array<Reco
 /**
  * Query memory stats from DB.
  */
-export function getMemoryStats(db: Database.Database, memoryPath: string, tokenBudget: number, systemChars: number, memoryChars: number) {
+export function getMemoryStats(db: Database.Database, memoryPath: string, tokenBudget: number, systemText: string, memoryText: string) {
 	const flow = db.prepare(
-		"SELECT count(*) as count, sum(length(content)) as size FROM messages WHERE context_content IS NULL AND archived_at IS NULL"
-	).get() as { count: number; size: number | null };
+		'SELECT count(*) as count FROM messages WHERE NOT archived'
+	).get() as { count: number };
+	const flowContent = db.prepare(
+		'SELECT content FROM messages WHERE NOT archived'
+	).all() as Array<{ content: string }>;
+	const flowTokens = flowContent.reduce((sum, r) => sum + estimateTokens(r.content), 0);
 
 	const compacted = db.prepare(
-		"SELECT count(*) as count, sum(length(context_content)) as size FROM messages WHERE context_content IS NOT NULL AND context_content != '' AND archived_at IS NULL"
-	).get() as { count: number; size: number | null };
-
-	const compactedOriginal = db.prepare(
-		"SELECT sum(length(content)) as size FROM messages WHERE context_content IS NOT NULL AND archived_at IS NULL"
-	).get() as { size: number | null };
+		'SELECT count(*) as count FROM compacted WHERE NOT archived'
+	).get() as { count: number };
+	const compactedContent = db.prepare(
+		'SELECT summary FROM compacted WHERE NOT archived'
+	).all() as Array<{ summary: string }>;
+	const compactedTokens = compactedContent.reduce((sum, r) => sum + estimateTokens(r.summary), 0);
 
 	const compactedGroups = db.prepare(
 		"SELECT count(DISTINCT group_end) as count FROM compaction_log WHERE op = 'compress'"
 	).get() as { count: number };
 
 	const archived = db.prepare(
-		"SELECT count(*) as count FROM messages WHERE archived_at IS NOT NULL"
+		'SELECT count(*) as count FROM messages WHERE archived'
 	).get() as { count: number };
 
 	const compressions = db.prepare(
@@ -424,17 +402,15 @@ export function getMemoryStats(db: Database.Database, memoryPath: string, tokenB
 		"SELECT created_at FROM compaction_log WHERE op = 'distill' ORDER BY id DESC LIMIT 10"
 	).all() as Array<{ created_at: string }>;
 
-	const systemTokens = estimateTokens(' '.repeat(systemChars));
-	const memoryTokens = estimateTokens(' '.repeat(memoryChars));
-	const compactedTokens = estimateTokens(' '.repeat(compacted.size ?? 0));
-	const flowTokens = estimateTokens(' '.repeat(flow.size ?? 0));
+	const systemTokens = estimateTokens(systemText);
+	const memoryTokens = estimateTokens(memoryText);
 	const used = systemTokens + memoryTokens + compactedTokens + flowTokens;
 
 	return {
 		context: {
 			system:    { tokens: systemTokens,    pct: Math.round(systemTokens / tokenBudget * 100) },
 			memory:    { tokens: memoryTokens,    pct: Math.round(memoryTokens / tokenBudget * 100) },
-			compacted: { tokens: compactedTokens, pct: Math.round(compactedTokens / tokenBudget * 100), groups: compactedGroups.count, originalTokens: estimateTokens(' '.repeat(compactedOriginal.size ?? 0)) },
+			compacted: { tokens: compactedTokens, pct: Math.round(compactedTokens / tokenBudget * 100), groups: compactedGroups.count },
 			flow:      { tokens: flowTokens,      pct: Math.round(flowTokens / tokenBudget * 100), messages: flow.count },
 			total:     { tokens: used,             pct: Math.round(used / tokenBudget * 100) },
 			budget:    tokenBudget,

@@ -49,6 +49,7 @@ const compactionLlm = createLLM({
 	model: process.env.COMPACTION_LLM_MODEL || LLM_MODEL,
 	baseUrl: process.env.COMPACTION_LLM_BASE_URL || LLM_BASE_URL,
 	timeoutMs: 240_000,
+	maxTokens: 25_000,
 });
 const chat = new ChatClient(CHAT_URL);
 const cronManager = new CronManager(db);
@@ -100,6 +101,7 @@ function getSystem(): string {
 const startTime = Date.now();
 let currentEvent: { source: string; type: string } | null = null;
 let abortController: AbortController | null = null;
+let compacting = false;
 
 startServer({
 	port: parseInt(AGENT_PORT),
@@ -110,11 +112,12 @@ startServer({
 		currentEvent,
 		queueDepth: queue.depth(),
 		tokensUsed: llm.tokensUsed,
+		compacting,
 	}),
 	getMemory: () => {
 		const system = [readPrompt('system.md'), readPrompt('user.md')].filter(Boolean).join('\n\n');
 		const mem = readPrompt('memory.md');
-		return getMemoryStats(db, `${PROMPTS_DIR}/memory.md`, CONTEXT_WINDOW, system.length, mem.length);
+		return getMemoryStats(db, `${PROMPTS_DIR}/memory.md`, CONTEXT_WINDOW, system, mem);
 	},
 	listCrons: () => cronManager.list(),
 	setCronEnabled: (name, enabled) => cronManager.setEnabled(name, enabled),
@@ -136,6 +139,40 @@ const HOUSEKEEPING_TYPES = new Set(['message_updated', 'typing']);
 const TOOL_OUTPUT_MAX_CHARS = 20_000;
 const TOOL_OUTPUT_PREVIEW_CHARS = 200;
 
+async function heartbeat() {
+	log.debug('heartbeat');
+	compacting = true;
+	try {
+		const t0 = Date.now();
+		const result = await memory.compact(compactionLlm);
+		if (result) compactionLog.info('idle compaction', {
+			groups: String(result.groups), messages: String(result.messages),
+			anchors: String(result.anchors),
+			tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter),
+			ratio: (result.tokensAfter / result.tokensBefore * 100).toFixed(1) + '%',
+			duration: ((Date.now() - t0) / 1000).toFixed(1) + 's',
+		});
+	} catch (e: any) {
+		compactionLog.error('idle compaction failed', { error: e.message });
+	}
+	try {
+		const t0 = Date.now();
+		const distilled = await memory.distill(compactionLlm);
+		if (distilled) compactionLog.info('distillation', {
+			distilled: String(distilled.distilled), archived: String(distilled.archived),
+			duration: ((Date.now() - t0) / 1000).toFixed(1) + 's',
+		});
+	} catch (e: any) {
+		compactionLog.error('distillation failed', { error: e.message });
+	}
+	compacting = false;
+	const dueCrons = cronManager.checkDue();
+	for (const { name, prompt } of dueCrons) {
+		log.info('cron due', { name });
+		queue.push('cron', 'scheduled', { name, prompt });
+	}
+}
+
 log.info('eliezer starting');
 
 while (true) {
@@ -148,35 +185,7 @@ while (true) {
 	if (!event) {
 		queue.cancelWait();
 		currentEvent = null;
-		log.debug('heartbeat');
-		try {
-			const t0 = Date.now();
-			const result = await memory.compact(compactionLlm);
-			if (result) compactionLog.info('idle compaction', {
-				groups: String(result.groups), messages: String(result.messages),
-				anchors: String(result.anchors),
-				tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter),
-				ratio: (result.tokensAfter / result.tokensBefore * 100).toFixed(1) + '%',
-				duration: ((Date.now() - t0) / 1000).toFixed(1) + 's',
-			});
-		} catch (e: any) {
-			compactionLog.error('idle compaction failed', { error: e.message });
-		}
-		try {
-			const t0 = Date.now();
-			const distilled = await memory.distill(compactionLlm);
-			if (distilled) compactionLog.info('distillation', {
-				distilled: String(distilled.distilled), archived: String(distilled.archived),
-				duration: ((Date.now() - t0) / 1000).toFixed(1) + 's',
-			});
-		} catch (e: any) {
-			compactionLog.error('distillation failed', { error: e.message });
-		}
-		const dueCrons = cronManager.checkDue();
-		for (const { name, prompt } of dueCrons) {
-			log.info('cron due', { name });
-			queue.push('cron', 'scheduled', { name, prompt });
-		}
+		await heartbeat();
 		continue;
 	}
 
