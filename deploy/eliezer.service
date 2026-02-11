@@ -4,12 +4,12 @@ After=network.target docker.service
 
 [Service]
 Type=simple
-User=eliezer
-Group=eliezer
 WorkingDirectory=/opt/eliezer
 ExecStart=/usr/bin/npx tsx eliezer.mts
-Restart=always
-RestartSec=3
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 # Env
 EnvironmentFile=/opt/eliezer/.env
@@ -20,10 +20,6 @@ StandardError=journal
 SyslogIdentifier=eliezer
 
 # Hardening
-NoNewPrivileges=yes
-ProtectSystem=strict
-ReadWritePaths=/opt/eliezer/state /opt/eliezer/prompts /opt/clawchat /tmp
-ProtectHome=yes
 PrivateTmp=yes
 
 [Install]

@@ -1,11 +1,10 @@
 APP_DIR := /opt/eliezer
-APP_USER := eliezer
 NODE_VERSION := 22
 
-.PHONY: setup deploy ssh-key install-deps create-user install-app configure install-searxng enable status logs
+.PHONY: setup deploy ssh-key install-deps install-app configure install-searxng enable status logs
 
-# Full setup: deps → user → app → pause for .env → searxng → systemd
-setup: install-deps create-user install-app configure install-searxng enable
+# Full setup: deps → app → pause for .env → searxng → systemd
+setup: install-deps install-app configure install-searxng enable
 
 install-deps:
 	# Node.js 22 via nodesource
@@ -14,15 +13,10 @@ install-deps:
 	# Docker (for SearXNG)
 	which docker || (curl -fsSL https://get.docker.com | sh)
 
-create-user:
-	id $(APP_USER) 2>/dev/null || useradd -r -m -s /bin/bash $(APP_USER)
-	usermod -aG docker $(APP_USER)
-
 install-app:
 	mkdir -p $(APP_DIR)/state
 	test -d $(APP_DIR)/.git || git clone https://github.com/clawchat/eliezer.git $(APP_DIR)
-	chown -R $(APP_USER):$(APP_USER) $(APP_DIR)
-	su - $(APP_USER) -c 'cd $(APP_DIR) && npm ci'
+	cd $(APP_DIR) && npm ci
 	# Gate curl/wget to localhost only
 	chmod +x $(APP_DIR)/deploy/curl-gate.sh $(APP_DIR)/deploy/wget-gate.sh
 	ln -sf $(APP_DIR)/deploy/curl-gate.sh /usr/local/bin/curl
