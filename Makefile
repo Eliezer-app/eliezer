@@ -1,4 +1,4 @@
-.PHONY: dev stop shell logs clean clean-compacted test test-up test-down export export-html api-docs dump-system status prod-start prod-stop prod-deploy prod-logs prod-logs-all
+.PHONY: dev stop shell logs clean clean-compacted test test-up test-down export export-html api-docs dump-system status prod-start prod-stop prod-deploy prod-git-unlock prod-logs prod-logs-all
 
 dev: stop test-down
 	rm -f state/eliezer.log
@@ -77,6 +77,9 @@ prod-start:
 
 prod-stop:
 	systemctl stop eliezer
+
+prod-git-unlock:
+	@echo 'eval "$$(ssh-agent -s)" && ssh-add /root/.ssh/git_access'
 
 prod-deploy:
 	$(MAKE) -C deploy deploy
