@@ -2,10 +2,10 @@ APP_DIR := /opt/eliezer
 APP_USER := eliezer
 NODE_VERSION := 22
 
-.PHONY: setup deploy ssh-key install-deps create-user install-app install-searxng enable status logs
+.PHONY: setup deploy ssh-key install-deps create-user install-app configure install-searxng enable status logs
 
-# Full setup: deps → user → app → searxng → systemd
-setup: install-deps create-user install-app install-searxng enable
+# Full setup: deps → user → app → pause for .env → searxng → systemd
+setup: install-deps create-user install-app configure install-searxng enable
 
 install-deps:
 	# Node.js 22 via nodesource
@@ -31,6 +31,9 @@ install-app:
 	cp $(APP_DIR)/deploy/eliezer.service /etc/systemd/system/eliezer.service
 	systemctl daemon-reload
 
+configure:
+	@test -f $(APP_DIR)/.env || (echo "Create $(APP_DIR)/.env with your API keys and config, then rerun make setup."; exit 1)
+
 install-searxng:
 	mkdir -p /opt/searxng
 	cp $(APP_DIR)/config/searxng/settings.yml /opt/searxng/settings.yml
@@ -46,7 +49,6 @@ enable:
 	systemctl enable --now eliezer
 	@echo ""
 	@echo "Eliezer is running. Check with: make status"
-	@echo "IMPORTANT: copy .env to $(APP_DIR)/.env before first run"
 
 ssh-key:
 	@echo "Generating git_access key (passphrase-protected, for manual git pull)..."
