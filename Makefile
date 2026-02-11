@@ -1,4 +1,4 @@
-.PHONY: dev stop shell logs clean clean-compacted test test-up test-down export export-html api-docs dump-system status
+.PHONY: dev stop shell logs clean clean-compacted test test-up test-down export export-html api-docs dump-system status prod-start prod-stop prod-deploy prod-logs prod-logs-all
 
 dev: stop test-down
 	rm -f state/eliezer.log
@@ -71,3 +71,18 @@ status:
 
 dump-system:
 	@npx tsx scripts/dump-system.mts state/system-dump.txt
+
+prod-start:
+	systemctl start eliezer
+
+prod-stop:
+	systemctl stop eliezer
+
+prod-deploy:
+	$(MAKE) -C deploy deploy
+
+prod-logs:
+	journalctl -u eliezer -f
+
+prod-logs-all:
+	journalctl -u eliezer --no-pager | less
