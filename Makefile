@@ -1,4 +1,4 @@
-.PHONY: dev stop shell logs clean clean-compacted test test-up test-down export export-html api-docs dump-system status prod-start prod-stop prod-deploy prod-git-unlock prod-logs prod-logs-all
+.PHONY: dev stop shell logs clean clean-compacted test test-up test-down export export-html api-docs dump-system status prod-start prod-stop prod-deploy prod-git-unlock prod-logs prod-logs-all prod-logs-clear
 
 dev: stop test-down
 	rm -f state/eliezer.log
@@ -55,7 +55,7 @@ api-docs:
 	@npx tsx -e "const s=require('fs').readFileSync('server.mts','utf-8');for(const l of s.split('\n')){const m=l.match(/^\t\t\/\/ ?(.*)/);if(m)console.log(m[1])}"
 
 status:
-	@echo "checking localhost:3200/info/memory"
+	@curl -sf http://localhost:3200/info/memory || (echo "ERROR: eliezer not reachable at localhost:3200"; exit 1)
 	@curl -sf http://localhost:3200/info/memory | jq -r ' \
 		"Context budget: \(.context.budget) tokens", \
 		"", \
@@ -79,7 +79,7 @@ prod-stop:
 	systemctl stop eliezer
 
 prod-git-unlock:
-	@echo 'eval "$$(ssh-agent -s)" && ssh-add /root/.ssh/git_access'
+	@echo 'eval "$$(ssh-agent -s)"; ssh-add /root/.ssh/git_access'
 
 prod-deploy:
 	$(MAKE) -C deploy deploy
@@ -89,3 +89,6 @@ prod-logs:
 
 prod-logs-all:
 	journalctl -u eliezer --no-pager | less
+
+prod-logs-clear:
+	journalctl --rotate && journalctl --vacuum-time=1s -u eliezer
