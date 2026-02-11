@@ -1,0 +1,11 @@
+"Context budget: \(.context.budget) tokens",
+"",
+"  system:    \(.context.system.tokens) tokens (\(.context.system.pct)%)",
+"  memory:    \(.context.memory.tokens) tokens (\(.context.memory.pct)%)",
+"  compacted: \(.context.compacted.tokens) tokens (\(.context.compacted.pct)%) - \(.context.compacted.groups) groups",
+"  flow:      \(.context.flow.tokens) tokens (\(.context.flow.pct)%) - \(.context.flow.messages) messages",
+"  total:     \(.context.total.tokens) tokens (\(.context.total.pct)%)",
+"",
+"Archived: \(.archived.messages) messages",
+"Compressions: \(.ops.compressions | length)",
+"Distillations: \(.ops.distillations | length)"

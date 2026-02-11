@@ -55,19 +55,8 @@ api-docs:
 	@npx tsx -e "const s=require('fs').readFileSync('server.mts','utf-8');for(const l of s.split('\n')){const m=l.match(/^\t\t\/\/ ?(.*)/);if(m)console.log(m[1])}"
 
 status:
-	@curl -sf http://localhost:3200/info/memory || (echo "ERROR: eliezer not reachable at localhost:3200"; exit 1)
-	@curl -sf http://localhost:3200/info/memory | jq -r ' \
-		"Context budget: \(.context.budget) tokens", \
-		"", \
-		"  system:    \(.context.system.tokens) tokens (\(.context.system.pct)%)", \
-		"  memory:    \(.context.memory.tokens) tokens (\(.context.memory.pct)%)", \
-		"  compacted: \(.context.compacted.tokens) tokens (\(.context.compacted.pct)%) — \(.context.compacted.groups) groups", \
-		"  flow:      \(.context.flow.tokens) tokens (\(.context.flow.pct)%) — \(.context.flow.messages) messages", \
-		"  total:     \(.context.total.tokens) tokens (\(.context.total.pct)%)", \
-		"", \
-		"Archived: \(.archived.messages) messages", \
-		"Compressions: \(.ops.compressions | length)", \
-		"Distillations: \(.ops.distillations | length)"'
+	@curl -sf http://localhost:3200/info/memory >/dev/null || (echo "ERROR: eliezer not reachable at localhost:3200"; exit 1)
+	@curl -sf http://localhost:3200/info/memory | jq -rf scripts/status.jq
 
 dump-system:
 	@npx tsx scripts/dump-system.mts state/system-dump.txt
