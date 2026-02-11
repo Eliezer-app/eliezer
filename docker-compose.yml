@@ -19,7 +19,7 @@ services:
       - .:/opt/eliezer
       - ../clawchat:/opt/clawchat
       - node_modules:/opt/eliezer/node_modules
-    command: npx tsx eliezer.mts
+    command: sh -c 'npx tsx eliezer.mts 2>&1 | stdbuf -oL tee -a /opt/eliezer/state/eliezer.log'
     env_file:
       - .env
     environment:
@@ -27,6 +27,17 @@ services:
     depends_on:
       init:
         condition: service_completed_successfully
+
+  searxng:
+    image: searxng/searxng
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080
+    volumes:
+      - ./config/searxng:/etc/searxng
 
 volumes:
   node_modules:

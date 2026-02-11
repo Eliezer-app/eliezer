@@ -83,4 +83,4 @@ Settings UI talks to the agent via these endpoints:
 - [x] Heartbeat cron check: scan due crons, push events to queue
 - [x] Handle `cron:scheduled` events in main loop (feed prompt to LLM)
 - [x] Unit tests
-- [ ] Integration test
+- [x] Integration test

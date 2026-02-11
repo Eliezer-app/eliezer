@@ -24,10 +24,12 @@ export abstract class LLMBase {
 	tokensUsed = 0;
 	tokenLimit: number;
 	protected timeoutMs: number;
+	protected maxTokens: number;
 
-	constructor(tokenLimit = 500_000, timeoutMs = 240_000) {
+	constructor(tokenLimit = 500_000, timeoutMs = 240_000, maxTokens = 4096) {
 		this.tokenLimit = tokenLimit;
 		this.timeoutMs = timeoutMs;
+		this.maxTokens = maxTokens;
 	}
 
 	hasBudget(): boolean { return this.tokensUsed < this.tokenLimit; }
@@ -36,10 +38,10 @@ export abstract class LLMBase {
 		this.tokensUsed += input + output;
 	}
 
-	abstract call(messages: Message[], system: string, tools?: ToolDef[], signal?: AbortSignal): Promise<LLMResponse>;
+	abstract call(messages: Message[], system: string, tools?: ToolDef[], signal?: AbortSignal, jsonMode?: boolean): Promise<LLMResponse>;
 }
 
-export function createLLM(opts: { provider: string; apiKey: string; model: string; baseUrl: string; tokenLimit?: number; timeoutMs?: number }): LLMBase {
+export function createLLM(opts: { provider: string; apiKey: string; model: string; baseUrl: string; tokenLimit?: number; timeoutMs?: number; maxTokens?: number }): LLMBase {
 	return opts.provider === 'anthropic'
 		? new AnthropicLLM(opts)
 		: new OpenAILLM(opts);
@@ -50,17 +52,17 @@ export class AnthropicLLM extends LLMBase {
 	private model: string;
 	private baseUrl: string;
 
-	constructor(opts: { apiKey: string; model: string; baseUrl?: string; tokenLimit?: number; timeoutMs?: number }) {
-		super(opts.tokenLimit, opts.timeoutMs);
+	constructor(opts: { apiKey: string; model: string; baseUrl?: string; tokenLimit?: number; timeoutMs?: number; maxTokens?: number }) {
+		super(opts.tokenLimit, opts.timeoutMs, opts.maxTokens);
 		this.apiKey = opts.apiKey;
 		this.model = opts.model;
 		this.baseUrl = (opts.baseUrl ?? 'https://api.anthropic.com').replace(/\/$/, '');
 	}
 
-	async call(messages: Message[], system: string, tools: ToolDef[] = [], signal?: AbortSignal): Promise<LLMResponse> {
+	async call(messages: Message[], system: string, tools: ToolDef[] = [], signal?: AbortSignal, _jsonMode?: boolean): Promise<LLMResponse> {
 		const body: any = {
 			model: this.model,
-			max_tokens: 4096,
+			max_tokens: this.maxTokens,
 			system,
 			messages,
 		};
@@ -98,18 +100,19 @@ export class OpenAILLM extends LLMBase {
 	private model: string;
 	private baseUrl: string;
 
-	constructor(opts: { apiKey: string; model: string; baseUrl: string; tokenLimit?: number; timeoutMs?: number }) {
-		super(opts.tokenLimit, opts.timeoutMs);
+	constructor(opts: { apiKey: string; model: string; baseUrl: string; tokenLimit?: number; timeoutMs?: number; maxTokens?: number }) {
+		super(opts.tokenLimit, opts.timeoutMs, opts.maxTokens);
 		this.apiKey = opts.apiKey;
 		this.model = opts.model;
 		this.baseUrl = opts.baseUrl.replace(/\/$/, '');
 	}
 
-	async call(messages: Message[], system: string, tools: ToolDef[] = [], signal?: AbortSignal): Promise<LLMResponse> {
+	async call(messages: Message[], system: string, tools: ToolDef[] = [], signal?: AbortSignal, jsonMode?: boolean): Promise<LLMResponse> {
 		const body: any = {
 			model: this.model,
 			messages: this.messagesToOpenAI(messages, system),
 		};
+		if (jsonMode) body.response_format = { type: 'json_object' };
 		if (tools.length) {
 			body.tools = tools.map(t => ({
 				type: 'function',

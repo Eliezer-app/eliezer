@@ -66,6 +66,9 @@ services:
       CHAT_URL: http://mock-chat:4100
       PROMPTS_DIR: ./prompts
       HEARTBEAT_MS: 1000
+      SEARCH_URL: http://localhost:8888
+      CONTEXT_WINDOW: 200000
+      USER_TZ: UTC
       LOG_LEVEL: debug
     depends_on:
       mock-llm:

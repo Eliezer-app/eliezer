@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Compaction Alignment</title>
+<style>
+  body { background: #1a1a2e; color: #e0e0e0; font-family: 'SF Mono', 'Fira Code', monospace; padding: 24px; font-size: 13px; }
+  h1 { color: #8be9fd; font-size: 18px; margin-bottom: 4px; }
+  .subtitle { color: #6272a4; margin-bottom: 24px; }
+  .day { color: #f1fa8c; font-size: 14px; margin: 20px 0 8px; }
+  .timeline { position: relative; margin-left: 60px; }
+  .row { display: flex; align-items: center; height: 22px; position: relative; }
+  .time { position: absolute; left: -60px; width: 50px; text-align: right; color: #6272a4; font-size: 11px; }
+  .track { display: flex; align-items: center; gap: 4px; }
+  .group-track { width: 240px; }
+  .llm-track { width: 240px; }
+  .connector { width: 40px; display: flex; align-items: center; justify-content: center; }
+  .connector svg { overflow: visible; }
+  .group-bar { height: 16px; border-radius: 3px; display: inline-flex; align-items: center; padding: 0 6px; font-size: 10px; font-weight: bold; }
+  .group-bar.matched { background: #50fa7b33; border: 1px solid #50fa7b; color: #50fa7b; }
+  .group-bar.skipped { background: #ff555533; border: 1px solid #ff5555; color: #ff5555; }
+  .llm-bar { height: 16px; border-radius: 3px; display: inline-flex; align-items: center; padding: 0 6px; font-size: 10px; font-weight: bold; }
+  .llm-bar.user { background: #bd93f933; border: 1px solid #bd93f9; color: #bd93f9; }
+  .llm-bar.agent { background: #8be9fd33; border: 1px solid #8be9fd; color: #8be9fd; }
+  .legend { display: flex; gap: 20px; margin: 16px 0; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+  .stats { color: #6272a4; margin-top: 16px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Compaction: Group → LLM Output Alignment</h1>
+<div class="subtitle">55 groups in, 44 LLM entries out. Timestamps matched to nearest minute.</div>
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:#50fa7b33;border:1px solid #50fa7b"></div> Group matched</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#ff555533;border:1px solid #ff5555"></div> Group skipped (merged)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#bd93f933;border:1px solid #bd93f9"></div> LLM user</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#8be9fd33;border:1px solid #8be9fd"></div> LLM agent</div>
+</div>
+<div id="chart"></div>
+<script>
+const groups = [
+  {i:0,t:'07:18',d:'2026-02-06',n:6},{i:1,t:'07:21',d:'2026-02-06',n:10},{i:2,t:'07:29',d:'2026-02-06',n:2},
+  {i:3,t:'07:34',d:'2026-02-06',n:2},{i:4,t:'07:39',d:'2026-02-06',n:4},{i:5,t:'07:43',d:'2026-02-06',n:2},
+  {i:6,t:'07:46',d:'2026-02-06',n:4},{i:7,t:'07:48',d:'2026-02-06',n:4},{i:8,t:'07:50',d:'2026-02-06',n:2},
+  {i:9,t:'07:53',d:'2026-02-06',n:2},{i:10,t:'07:56',d:'2026-02-06',n:2},{i:11,t:'07:58',d:'2026-02-06',n:2},
+  {i:12,t:'08:01',d:'2026-02-06',n:2},{i:13,t:'08:11',d:'2026-02-06',n:6},{i:14,t:'08:16',d:'2026-02-06',n:2},
+  {i:15,t:'08:23',d:'2026-02-06',n:3},{i:16,t:'08:25',d:'2026-02-06',n:4},{i:17,t:'08:30',d:'2026-02-06',n:2},
+  {i:18,t:'08:31',d:'2026-02-06',n:6},{i:19,t:'08:32',d:'2026-02-06',n:2},{i:20,t:'08:37',d:'2026-02-06',n:2},
+  {i:21,t:'08:41',d:'2026-02-06',n:2},{i:22,t:'08:45',d:'2026-02-06',n:2},{i:23,t:'08:51',d:'2026-02-06',n:2},
+  {i:24,t:'08:55',d:'2026-02-06',n:2},{i:25,t:'09:01',d:'2026-02-06',n:2},{i:26,t:'09:04',d:'2026-02-06',n:2},
+  {i:27,t:'09:12',d:'2026-02-06',n:2},{i:28,t:'09:21',d:'2026-02-06',n:2},{i:29,t:'09:28',d:'2026-02-06',n:2},
+  {i:30,t:'09:31',d:'2026-02-06',n:2},
+  {i:31,t:'10:36',d:'2026-02-07',n:8},{i:32,t:'10:38',d:'2026-02-07',n:3},{i:33,t:'10:40',d:'2026-02-07',n:28},
+  {i:34,t:'10:44',d:'2026-02-07',n:4},{i:35,t:'10:58',d:'2026-02-07',n:12},
+  {i:36,t:'23:28',d:'2026-02-07',n:2},{i:37,t:'23:31',d:'2026-02-07',n:18},{i:38,t:'23:38',d:'2026-02-07',n:4},
+  {i:39,t:'19:07',d:'2026-02-08',n:1},{i:40,t:'19:10',d:'2026-02-08',n:3},{i:41,t:'19:13',d:'2026-02-08',n:1},
+  {i:42,t:'19:16',d:'2026-02-08',n:3},{i:43,t:'19:19',d:'2026-02-08',n:1},{i:44,t:'19:23',d:'2026-02-08',n:3},
+  {i:45,t:'19:25',d:'2026-02-08',n:1},{i:46,t:'19:29',d:'2026-02-08',n:7},{i:47,t:'20:04',d:'2026-02-08',n:24},
+  {i:48,t:'21:52',d:'2026-02-08',n:16},
+  {i:49,t:'03:38',d:'2026-02-09',n:19},{i:50,t:'03:42',d:'2026-02-09',n:32},{i:51,t:'03:49',d:'2026-02-09',n:25},
+  {i:52,t:'03:57',d:'2026-02-09',n:3},{i:53,t:'04:01',d:'2026-02-09',n:9},{i:54,t:'04:04',d:'2026-02-09',n:2},
+];
+
+const llmEntries = [
+  {time:'07:18',d:'2026-02-06',role:'user'},{time:'07:18',d:'2026-02-06',role:'agent'},
+  {time:'07:21',d:'2026-02-06',role:'user'},{time:'07:21',d:'2026-02-06',role:'agent'},
+  {time:'07:29',d:'2026-02-06',role:'user'},{time:'07:29',d:'2026-02-06',role:'agent'},
+  {time:'07:34',d:'2026-02-06',role:'user'},{time:'07:34',d:'2026-02-06',role:'agent'},
+  {time:'07:43',d:'2026-02-06',role:'user'},{time:'07:43',d:'2026-02-06',role:'agent'},
+  {time:'07:46',d:'2026-02-06',role:'user'},{time:'07:46',d:'2026-02-06',role:'agent'},
+  {time:'08:23',d:'2026-02-06',role:'user'},{time:'08:23',d:'2026-02-06',role:'agent'},
+  {time:'08:37',d:'2026-02-06',role:'user'},{time:'08:37',d:'2026-02-06',role:'agent'},
+  {time:'08:41',d:'2026-02-06',role:'user'},
+  {time:'08:45',d:'2026-02-06',role:'user'},{time:'08:45',d:'2026-02-06',role:'agent'},
+  {time:'09:12',d:'2026-02-06',role:'user'},{time:'09:12',d:'2026-02-06',role:'agent'},
+  {time:'10:36',d:'2026-02-07',role:'user'},
+  {time:'10:58',d:'2026-02-07',role:'user'},{time:'10:58',d:'2026-02-07',role:'agent'},
+  {time:'23:31',d:'2026-02-07',role:'user'},{time:'23:31',d:'2026-02-07',role:'agent'},
+  {time:'19:07',d:'2026-02-08',role:'user'},{time:'19:07',d:'2026-02-08',role:'agent'},
+  {time:'19:13',d:'2026-02-08',role:'user'},
+  {time:'19:23',d:'2026-02-08',role:'user'},
+  {time:'19:30',d:'2026-02-08',role:'agent'},
+  {time:'20:04',d:'2026-02-08',role:'user'},{time:'20:04',d:'2026-02-08',role:'agent'},
+  {time:'21:52',d:'2026-02-08',role:'user'},{time:'21:52',d:'2026-02-08',role:'agent'},
+  {time:'03:38',d:'2026-02-09',role:'user'},{time:'03:38',d:'2026-02-09',role:'agent'},
+  {time:'03:43',d:'2026-02-09',role:'user'},{time:'03:44',d:'2026-02-09',role:'agent'},
+  {time:'03:52',d:'2026-02-09',role:'user'},
+  {time:'03:57',d:'2026-02-09',role:'user'},
+  {time:'04:01',d:'2026-02-09',role:'agent'},
+  {time:'04:04',d:'2026-02-09',role:'user'},{time:'04:05',d:'2026-02-09',role:'agent'},
+];
+
+// Match: which groups have an LLM entry within 2 min?
+function toMin(d, t) { return d + 'T' + t; }
+const llmTimes = new Set(llmEntries.map(e => e.d + 'T' + e.time));
+const matchedGroups = new Set();
+for (const g of groups) {
+  const gt = toMin(g.d, g.t);
+  // check exact or ±1 min
+  const [h, m] = g.t.split(':').map(Number);
+  const times = [gt];
+  if (m > 0) times.push(g.d + 'T' + String(h).padStart(2,'0') + ':' + String(m-1).padStart(2,'0'));
+  times.push(g.d + 'T' + String(h).padStart(2,'0') + ':' + String(m+1).padStart(2,'0'));
+  for (const t of times) { if (llmTimes.has(t)) { matchedGroups.add(g.i); break; } }
+}
+
+// Build rows
+const chart = document.getElementById('chart');
+const days = [...new Set(groups.map(g => g.d).concat(llmEntries.map(e => e.d)))].sort();
+
+for (const day of days) {
+  const dayDiv = document.createElement('div');
+  dayDiv.className = 'day';
+  dayDiv.textContent = day;
+  chart.appendChild(dayDiv);
+
+  const timeline = document.createElement('div');
+  timeline.className = 'timeline';
+  chart.appendChild(timeline);
+
+  // Interleave groups and LLM entries for this day
+  const dayGroups = groups.filter(g => g.d === day);
+  const dayLlm = llmEntries.filter(e => e.d === day);
+
+  // Collect all unique times
+  const allTimes = [...new Set([...dayGroups.map(g => g.t), ...dayLlm.map(e => e.time)])].sort();
+
+  for (const t of allTimes) {
+    const gs = dayGroups.filter(g => g.t === t);
+    const ls = dayLlm.filter(e => e.time === t);
+    const maxRows = Math.max(gs.length, ls.length, 1);
+
+    for (let r = 0; r < maxRows; r++) {
+      const row = document.createElement('div');
+      row.className = 'row';
+
+      const timeEl = document.createElement('span');
+      timeEl.className = 'time';
+      timeEl.textContent = r === 0 ? t : '';
+      row.appendChild(timeEl);
+
+      const groupTrack = document.createElement('span');
+      groupTrack.className = 'track group-track';
+      if (gs[r]) {
+        const bar = document.createElement('span');
+        bar.className = 'group-bar ' + (matchedGroups.has(gs[r].i) ? 'matched' : 'skipped');
+        bar.textContent = 'G' + String(gs[r].i).padStart(2,'0') + ' (' + gs[r].n + ' msgs)';
+        bar.style.minWidth = Math.max(40, gs[r].n * 6) + 'px';
+        groupTrack.appendChild(bar);
+      }
+      row.appendChild(groupTrack);
+
+      const conn = document.createElement('span');
+      conn.className = 'connector';
+      if (gs[r] && matchedGroups.has(gs[r].i) && ls[r]) {
+        conn.innerHTML = '<svg width="30" height="2"><line x1="0" y1="1" x2="30" y2="1" stroke="#50fa7b" stroke-width="1" stroke-dasharray="3,2"/></svg>';
+      }
+      row.appendChild(conn);
+
+      const llmTrack = document.createElement('span');
+      llmTrack.className = 'track llm-track';
+      if (ls[r]) {
+        const bar = document.createElement('span');
+        bar.className = 'llm-bar ' + ls[r].role;
+        bar.textContent = ls[r].role;
+        llmTrack.appendChild(bar);
+      }
+      row.appendChild(llmTrack);
+
+      timeline.appendChild(row);
+    }
+  }
+}
+
+// Stats
+const stats = document.createElement('div');
+stats.className = 'stats';
+stats.textContent = `${matchedGroups.size}/${groups.length} groups matched (${Math.round(matchedGroups.size/groups.length*100)}%) · ${groups.length - matchedGroups.size} skipped/merged · ${llmEntries.length} LLM entries`;
+chart.appendChild(stats);
+</script>
+</body>
+</html>

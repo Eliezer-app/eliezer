@@ -153,24 +153,24 @@ LOG_LEVELS=
 ## Tasks
 
 ### Phase 1 — Mock LLM & test foundation
-- [ ] Mock LLM server (OpenAI-compatible HTTP server, canned responses)
-- [ ] `log.mts` — Logger with logfmt, levels, child loggers
+- [x] Mock LLM server (OpenAI-compatible HTTP server, canned responses)
+- [x] `log.mts` — Logger with logfmt, levels, child loggers
 
 ### Phase 2 — Minimal loop (end-to-end against mock)
-- [ ] `llm.mts` — LLMBase, OpenAILLM (test against mock first)
-- [ ] `queue.mts` — EventQueue with deferred-promise pop, SQLite schema
-- [ ] `server.mts` — HTTP server with POST /events and GET /health
-- [ ] `eliezer.mts` — entry point, wiring, bare main loop (no tools, no chat)
-- [ ] Verify: post event → agent calls mock LLM → logs response
+- [x] `llm.mts` — LLMBase, OpenAILLM (test against mock first)
+- [x] `queue.mts` — EventQueue with deferred-promise pop, SQLite schema
+- [x] `server.mts` — HTTP server with POST /events and GET /health
+- [x] `eliezer.mts` — entry point, wiring, bare main loop (no tools, no chat)
+- [x] Verify: post event → agent calls mock LLM → logs response
 
 ### Phase 3 — Integration test harness
-- [ ] Test script: starts mock LLM, starts agent, posts event, asserts LLM was called
-- [ ] CI-friendly (exit codes, timeout)
+- [x] Test script: starts mock LLM, starts agent, posts event, asserts LLM was called
+- [x] CI-friendly (exit codes, timeout)
 
 ### Phase 4 — Tools
-- [ ] `tools.mts` — ToolBase, ExecTool, WriteTool, ReadTool, RestartSelfTool
-- [ ] Wire tools into the loop (LLM calls tools, results fed back)
-- [ ] Verify: mock LLM returns tool_use → agent executes → result fed back to LLM
+- [x] `tools.mts` — ToolBase, ExecTool, WriteTool, ReadTool, RestartSelfTool
+- [x] Wire tools into the loop (LLM calls tools, results fed back)
+- [x] Verify: mock LLM returns tool_use → agent executes → result fed back to LLM
 
 ### Phase 5 — Chat integration
 - [x] `chat.mts` — ChatClient + ChatTool (send/update/delete)
@@ -179,18 +179,18 @@ LOG_LEVELS=
 - [x] Verify: post event → LLM responds with text → text auto-sent to chat server
 
 ### Phase 6 — Memory & prompts
-- [ ] `memory.mts` — extract Memory class, wire into loop
-- [ ] `prompts/` — system.md, user.md, memory.md
-- [ ] Prompt assembly (system + user + memory)
+- [x] `memory.mts` — extract Memory class, wire into loop
+- [x] `prompts/` — system.md, user.md, memory.md
+- [x] Prompt assembly (system + user + memory)
 
 ### Phase 7 — AnthropicLLM & config
-- [ ] `llm.mts` — AnthropicLLM (second provider)
-- [ ] `credentials.env.example` — all config vars
-- [ ] LLM_PROVIDER config switch in entry point
+- [x] `llm.mts` — AnthropicLLM (second provider)
+- [x] `credentials.env.example` — all config vars
+- [x] LLM_PROVIDER config switch in entry point
 
 ### Phase 8 — Deployment
-- [ ] `docker-compose.yml` — update ports and env
-- [ ] `Makefile` — update run target
-- [ ] Old queue migration in EventQueue
-- [ ] `docs/agent-architecture.md` — update with final architecture
-- [ ] Full integration: clawchat + eliezer end-to-end
+- [x] `docker-compose.yml` — update ports and env
+- [x] `Makefile` — update run target
+- [x] Old queue migration in EventQueue
+- [x] `docs/agent-architecture.md` — update with final architecture
+- [x] Full integration: clawchat + eliezer end-to-end

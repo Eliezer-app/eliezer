@@ -6,7 +6,8 @@ import { createLLM, ContentBlock } from './llm.mts';
 import { EventQueue, AgentEvent } from './queue.mts';
 import { Memory } from './memory.mts';
 import { startServer } from './server.mts';
-import { createTools, createSearchHistoryTool, createScheduleTool } from './tools.mts';
+import { createTools, createSearchHistoryTool, createScheduleTool, createWebSearchTool } from './tools.mts';
+import { SearXNGProvider } from './search.mts';
 import { CronManager } from './cron.mts';
 import { ChatClient, createChatTool } from './chat.mts';
 import { getMemoryStats } from './compaction.mts';
@@ -28,7 +29,9 @@ const AGENT_PORT = requireEnv('AGENT_PORT');
 const DB_PATH = requireEnv('DB_PATH');
 const CHAT_URL = requireEnv('CHAT_URL');
 const PROMPTS_DIR = requireEnv('PROMPTS_DIR');
+const SEARCH_URL = requireEnv('SEARCH_URL');
 const HEARTBEAT_MS = Number(requireEnv('HEARTBEAT_MS').replace(/_/g, ''));
+const USER_TZ = requireEnv('USER_TZ');
 
 const log = new Logger();
 
@@ -38,7 +41,7 @@ const db = new Database(DB_PATH);
 
 // Components
 const queue = new EventQueue(db);
-const memory = new Memory(db);
+const memory = new Memory(db, USER_TZ);
 const llm = createLLM({ provider: LLM_PROVIDER, apiKey: LLM_API_KEY, model: LLM_MODEL, baseUrl: LLM_BASE_URL });
 const compactionLlm = createLLM({
 	provider: process.env.COMPACTION_LLM_PROVIDER || LLM_PROVIDER,
@@ -50,7 +53,7 @@ const compactionLlm = createLLM({
 const chat = new ChatClient(CHAT_URL);
 const cronManager = new CronManager(db);
 
-const TOKEN_BUDGET = 80_000;
+const CONTEXT_WINDOW = Number(requireEnv('CONTEXT_WINDOW'));
 
 // Compaction config
 function parseDuration(s: string, defaultSec: number): number {
@@ -64,12 +67,13 @@ function parseDuration(s: string, defaultSec: number): number {
 	}
 }
 memory.setCompactionConfig({
-	tokenBudget: TOKEN_BUDGET,
+	tokenBudget: CONTEXT_WINDOW,
 	groupGapSeconds: parseDuration(process.env.COMPACTION_GROUP_GAP || '1m', 60),
 	flowLimitSeconds: parseDuration(process.env.COMPACTION_FLOW_LIMIT || '1m', 60),
 	promptsDir: PROMPTS_DIR,
 });
-const tools = [...createTools(), createChatTool(chat), createSearchHistoryTool(db), createScheduleTool(cronManager)];
+const searchProvider = new SearXNGProvider(SEARCH_URL);
+const tools = [...createTools(compactionLlm), createChatTool(chat), createSearchHistoryTool(db), createScheduleTool(cronManager), createWebSearchTool(searchProvider, compactionLlm)];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
 function readPrompt(name: string): string {
@@ -88,6 +92,8 @@ function getSystem(): string {
 		);
 		parts.push(`# Scheduled Tasks\n${lines.join('\n')}`);
 	}
+	const history = memory.getCompactedHistory();
+	if (history) parts.push(`# Conversation History\n${history}`);
 	return parts.filter(Boolean).join('\n\n');
 }
 
@@ -108,7 +114,7 @@ startServer({
 	getMemory: () => {
 		const system = [readPrompt('system.md'), readPrompt('user.md')].filter(Boolean).join('\n\n');
 		const mem = readPrompt('memory.md');
-		return getMemoryStats(db, `${PROMPTS_DIR}/memory.md`, TOKEN_BUDGET, system.length, mem.length);
+		return getMemoryStats(db, `${PROMPTS_DIR}/memory.md`, CONTEXT_WINDOW, system.length, mem.length);
 	},
 	listCrons: () => cronManager.list(),
 	setCronEnabled: (name, enabled) => cronManager.setEnabled(name, enabled),
@@ -144,10 +150,27 @@ while (true) {
 		currentEvent = null;
 		log.debug('heartbeat');
 		try {
+			const t0 = Date.now();
 			const result = await memory.compact(compactionLlm);
-			if (result) compactionLog.info('idle compaction', { tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter) });
+			if (result) compactionLog.info('idle compaction', {
+				groups: String(result.groups), messages: String(result.messages),
+				anchors: String(result.anchors),
+				tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter),
+				ratio: (result.tokensAfter / result.tokensBefore * 100).toFixed(1) + '%',
+				duration: ((Date.now() - t0) / 1000).toFixed(1) + 's',
+			});
 		} catch (e: any) {
 			compactionLog.error('idle compaction failed', { error: e.message });
+		}
+		try {
+			const t0 = Date.now();
+			const distilled = await memory.distill(compactionLlm);
+			if (distilled) compactionLog.info('distillation', {
+				distilled: String(distilled.distilled), archived: String(distilled.archived),
+				duration: ((Date.now() - t0) / 1000).toFixed(1) + 's',
+			});
+		} catch (e: any) {
+			compactionLog.error('distillation failed', { error: e.message });
 		}
 		const dueCrons = cronManager.checkDue();
 		for (const { name, prompt } of dueCrons) {
@@ -159,8 +182,8 @@ while (true) {
 
 	if (event.type === 'message_deleted') {
 		const payload = event.payload as any;
-		const deleted = memory.deleteByChatMessageId(payload.messageId);
-		log.info('message deleted from memory', { messageId: payload.messageId, deleted });
+		const deleted = memory.deleteUncompacted(payload.messageId);
+		log.info('message delete requested', { messageId: payload.messageId, deleted });
 		queue.done(event.id);
 		continue;
 	}
@@ -220,7 +243,12 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 				try {
 					const result = await memory.compactTail(compactionLlm);
 					if (result) {
-						compactionLog.info('emergency compaction', { tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter) });
+						compactionLog.info('emergency compaction', {
+							groups: String(result.groups), messages: String(result.messages),
+							anchors: String(result.anchors),
+							tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter),
+							ratio: (result.tokensAfter / result.tokensBefore * 100).toFixed(1) + '%',
+						});
 					} else {
 						compactionRetries = 0;
 					}

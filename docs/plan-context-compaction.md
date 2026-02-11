@@ -160,23 +160,32 @@ Better to lose some context fidelity than to exceed the window.
 System prompt:
   1. Instructions (system.md)
   2. Memory (memory.md)
-  3. Compacted history: SELECT context_content FROM messages
+
+Messages:
+  3. Compacted history as role-correct messages:
+     SELECT role, context_content, created_at FROM messages
        WHERE context_content IS NOT NULL
          AND context_content != ''
          AND archived_at IS NULL
        ORDER BY rowid
-     → joined as timestamped summaries
-
-Messages (flow zone):
-  4. SELECT * FROM messages
+     → each injected as {role, content: "[timestamp+offset] summary"}
+     → consecutive same-role merged
+  4. Flow zone (raw messages):
+     SELECT role, content, created_at FROM messages
        WHERE context_content IS NULL
          AND archived_at IS NULL
        ORDER BY rowid
-     → raw content as conversation messages
+     → each prefixed with [timestamp+offset]
+     → consecutive same-role merged
 ```
 
-Clean separation: system prompt has background (instructions + memory + summaries),
-messages array has only the live conversation flow.
+Compacted summaries are injected as real conversation messages with correct roles
+(user decisions come from user-role messages, agent actions from assistant-role).
+The structured compaction output includes role per entry; `findAnchorMessage` is
+role-aware so each summary lands on a DB row matching its role.
+
+Timestamps use the user's timezone (`USER_TZ` env var) formatted as ISO 8601 with
+offset (e.g. `2026-02-06T08:46-08:00`).
 
 Compression is NOT triggered by getContext(). It runs separately:
 - From the heartbeat loop (every tick)
@@ -184,9 +193,9 @@ Compression is NOT triggered by getContext(). It runs separately:
 
 ### Token budget
 
-Default: 80k tokens (~320k chars). Configurable.
-- Idle target: flow zone ≤ 1/3 (~27k tokens)
-- Emergency threshold: 90% (~72k tokens)
+Configured via `CONTEXT_WINDOW` env var (default: 200k for Claude, 250k for Kimi K2).
+- Idle target: flow zone ≤ 1/3 of budget
+- Emergency threshold: 90% of budget
 
 Steady-state layout of the context window:
 ```
@@ -194,7 +203,6 @@ Steady-state layout of the context window:
 │  compacted history           │  fills available space
 │  flow zone                   │  ~1/3 budget (uncompressed)
 ```
-This leaves room for the LLM response in a 128k context window.
 
 ### Observability
 
@@ -259,17 +267,18 @@ finds the relevant messages, and answers from the raw record.
 
 Build and test the compression pipeline. Agent keeps working as before.
 
-- [ ] DB migrations: `context_content`, `archived_at`, `compaction_log` columns/table
-- [ ] Compaction LLM instance (separate `COMPACTION_LLM_*` config, falls back to main)
-- [ ] Time-based group detection: `identifyGroups(gapSeconds)` → array of rowid ranges
-- [ ] Token estimator: `estimateTokens()` → number
-- [ ] LLM summarizer: `summarizeGroup(messages, llm)` → string
-- [ ] `compressGroup(group)` — calls summarizer, writes `context_content` to DB
-- [ ] Distiller: `distillToMemory(summaries, currentMemory, llm)` → string
-- [ ] `compaction_log` logging in compress/distill ops
-- [ ] `/info/memory` endpoint
-- [ ] `search_history` tool (query raw content across all messages)
-- [ ] Unit tests for all of the above
+- [x] DB migrations: `context_content`, `archived_at`, `compaction_log` columns/table
+- [x] Compaction LLM instance (separate `COMPACTION_LLM_*` config, falls back to main)
+- [x] Time-based group detection: `identifyGroups(gapSeconds)` → array of rowid ranges
+- [x] Token estimator: `estimateTokens()` → number
+- [x] Structured compaction: LLM produces `{entries: [{time, role, summary}, ...]}` with JSON mode
+- [x] Role-aware anchor matching: `findAnchorMessage(time, role, messages)` prefers matching role
+- [x] `compressGroup(group)` / `compressGroups(groups)` — calls LLM, writes anchors to DB
+- [x] Distiller: `distillToMemory(summaries, currentMemory, llm)` → string
+- [x] `compaction_log` logging in compress/distill ops
+- [x] `/info/memory` endpoint
+- [x] `search_message_history` tool (AND-matched parts across raw content + summaries)
+- [x] Unit tests for all of the above
 
 Validate: run compression on real messages, inspect summaries, tune prompts.
 
@@ -279,13 +288,19 @@ Wire triggers into heartbeat/event loop. Compaction runs and writes to DB,
 but `getContext()` still uses the old 100-message sliding window.
 Observable via `/info/memory`.
 
-- [ ] Idle compression in heartbeat loop
-- [ ] Emergency compression in handleEvent
-- [ ] Parse `COMPACTION_GROUP_GAP` and `COMPACTION_FLOW_LIMIT` env vars
+- [x] Idle compression in heartbeat loop
+- [x] Emergency compression in handleEvent
+- [x] Parse `COMPACTION_GROUP_GAP` and `COMPACTION_FLOW_LIMIT` env vars
 
 ### Phase 3: Use compacted context (runtime behavior change)
 
 Flip `getContext()` to the new layout. Agent starts using compacted history.
 
-- [ ] Update `getContext()` — summaries in system prompt, flow zone in messages
+- [x] Update `getContext()` — compacted summaries as role-correct messages, flow zone after
+- [x] Consecutive same-role message merging (compacted + flow zones)
+- [x] Timestamps on all messages (`USER_TZ`-aware with offset)
+- [x] `USER_TZ` env var for timezone configuration
+- [x] JSON mode (`response_format: { type: 'json_object' }`) for compaction LLM
+- [x] Format instructions in user message (not system) for Kimi K2.5 compliance
+- [x] Dynamic entry count hint in compaction prompt
 - [ ] Integration tests

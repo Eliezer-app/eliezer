@@ -23,7 +23,7 @@ let mem = '';
 try { mem = readFileSync(process.env.PROMPTS_DIR + '/memory.md', 'utf-8').trim(); } catch {}
 if (mem) parts.push('## Memory\n' + mem);
 const summaries = getCompactedSummaries(db);
-if (summaries.length) parts.push('## Compacted history\n' + summaries.join('\n\n'));
+if (summaries.length) parts.push('## Compacted history\n' + summaries.map(s => `[${s.role}] ${s.summary}`).join('\n\n'));
 const priorContext = parts.length ? parts.join('\n\n') : undefined;
 
 console.log(`Compressing group 0 (rowids ${group.start}-${group.end}, ${group.messages.length} msgs) with prior context...`);
