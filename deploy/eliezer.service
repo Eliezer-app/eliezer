@@ -1,0 +1,30 @@
+[Unit]
+Description=Eliezer AI Agent
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=eliezer
+Group=eliezer
+WorkingDirectory=/opt/eliezer
+ExecStart=/usr/bin/npx tsx eliezer.mts
+Restart=always
+RestartSec=3
+
+# Env
+EnvironmentFile=/opt/eliezer/.env
+
+# Logging — stdout/stderr go to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=eliezer
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/eliezer/state /opt/eliezer/prompts /opt/clawchat /tmp
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

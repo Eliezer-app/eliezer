@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { ContentBlock, Message, LLMBase } from './llm.mts';
 import { readFileSync } from 'fs';
 import { Logger } from './log.mts';
-import { getUncompressedGroups, getCompactedSummaries, compressGroup, compressGroups, distillToMemory, estimateTokens, formatTimestamp, BATCH_CHARS } from './compaction.mts';
+import { getUncompressedGroups, getCompactedSummaries, compressGroup, compressGroups, distillToMemory, estimateTokens, formatTimestamp, BATCH_CHARS, CompactionResult } from './compaction.mts';
 
 const log = new Logger({ module: 'Memory' });
 
@@ -194,7 +194,7 @@ export class Memory {
 	}
 
 	/** Idle compaction: compress one batch of eligible groups per call. */
-	async compact(llm: LLMBase): Promise<{ tokensBefore: number; tokensAfter: number } | null> {
+	async compact(llm: LLMBase): Promise<CompactionResult | null> {
 		if (!this.compaction) throw new Error('compaction not configured');
 		const { tokenBudget, groupGapSeconds, flowLimitSeconds, promptsDir } = this.compaction;
 
@@ -234,7 +234,7 @@ export class Memory {
 	}
 
 	/** Emergency compaction: compress oldest group only, with full prior context. */
-	async compactTail(llm: LLMBase): Promise<{ tokensBefore: number; tokensAfter: number } | null> {
+	async compactTail(llm: LLMBase): Promise<CompactionResult | null> {
 		if (!this.compaction) throw new Error('compaction not configured');
 		const { tokenBudget, groupGapSeconds, promptsDir } = this.compaction;
 

@@ -42,6 +42,7 @@ test-down:
 	docker compose -f docker-compose.test.yml down
 
 test: stop test-up
+	npx tsc --noEmit
 	@npm test; ret=$$?; $(MAKE) test-down; exit $$ret
 
 export:

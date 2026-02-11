@@ -122,7 +122,7 @@ startServer({
 	},
 	listCrons: () => cronManager.list(),
 	setCronEnabled: (name, enabled) => cronManager.setEnabled(name, enabled),
-	stop: async () => {
+	stop: () => {
 		if (!abortController) return false;
 		abortController.abort();
 		return true;
@@ -207,7 +207,12 @@ while (true) {
 	currentEvent = { source: event.source, type: event.type };
 	abortController = new AbortController();
 	try {
-		await handleEvent(event, abortController.signal);
+		const result = await handleEvent(event, abortController.signal);
+		if (result === 'restart') {
+			queue.done(event.id);
+			log.info('restart requested — exiting');
+			break;
+		}
 	} catch (e: any) {
 		if (e.name === 'AbortError') {
 			log.info('event aborted by user', { source: event.source, type: event.type });
@@ -302,10 +307,10 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 			memory.add('assistant', content);
 
 			const results: ContentBlock[] = [];
-			let shouldBreak = false;
+			let shouldBreak: false | 'abort' | 'restart' = false;
 
 			for (const tu of toolUses) {
-				if (signal.aborted) { shouldBreak = true; break; }
+				if (signal.aborted) { shouldBreak = 'abort'; break; }
 				const tool = tools.find(t => t.name === tu.name);
 				if (!tool) {
 					results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool: ${tu.name}` });
@@ -324,16 +329,17 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 				log.info(`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
 				await chat.send('default', JSON.stringify({ tool: tu.name, result: content, isError }), 'tool_result').catch((e: any) => log.error('chat send tool_result', { tool: tu.name, error: e.message }));
 				results.push({ type: 'tool_result', tool_use_id: tu.id, content });
-				if (toolSignal === 'restart') { shouldBreak = true; break; }
+				if (toolSignal === 'restart') { shouldBreak = 'restart'; break; }
 			}
 
 			memory.add('user', results);
 			if (shouldBreak) {
-				if (signal.aborted) {
+				if (shouldBreak === 'abort') {
 					memory.add('user', '[user stopped agent execution]');
 					await chat.send('default', '(stopped)').catch(() => {});
 				}
 				await chat.typing(false);
+				if (shouldBreak === 'restart') return 'restart';
 				break;
 			}
 		}
