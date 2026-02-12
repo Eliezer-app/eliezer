@@ -103,7 +103,8 @@ function getSystem(): string {
 const startTime = Date.now();
 let currentEvent: { source: string; type: string } | null = null;
 let abortController: AbortController | null = null;
-let compacting = false;
+type AgentState = 'idle' | 'inference' | 'tool_execution' | 'compaction';
+let agentState: AgentState = 'idle';
 
 startServer({
 	port: parseInt(AGENT_PORT),
@@ -112,9 +113,9 @@ startServer({
 	getHealth: () => ({ status: 'ok', uptime: Math.floor((Date.now() - startTime) / 1000) }),
 	getState: () => ({
 		currentEvent,
+		state: agentState,
 		queueDepth: queue.depth(),
 		tokensUsed: llm.tokensUsed,
-		compacting,
 	}),
 	getMemory: () => {
 		const system = [readPrompt('system.md'), readPrompt('user.md')].filter(Boolean).join('\n\n');
@@ -143,7 +144,7 @@ const TOOL_OUTPUT_PREVIEW_CHARS = 200;
 
 async function heartbeat() {
 	log.debug('heartbeat');
-	compacting = true;
+	agentState = 'compaction';
 	try {
 		const t0 = Date.now();
 		const result = await memory.compact(compactionLlm);
@@ -167,7 +168,7 @@ async function heartbeat() {
 	} catch (e: any) {
 		compactionLog.error('distillation failed', { error: e.message });
 	}
-	compacting = false;
+	agentState = 'idle';
 	const dueCrons = cronManager.checkDue();
 	for (const { name, prompt } of dueCrons) {
 		log.info('cron due', { name });
@@ -233,6 +234,7 @@ while (true) {
 		}
 	}
 	abortController = null;
+	agentState = 'idle';
 	queue.done(event.id);
 }
 
@@ -262,6 +264,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 				break;
 			}
 			if (compactionRetries > 0) {
+				agentState = 'compaction';
 				try {
 					const result = await memory.compactTail(compactionLlm);
 					if (result) {
@@ -280,6 +283,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					if (compactionRetries === 0) compactionLog.error('emergency compaction exhausted, context may exceed budget');
 				}
 			}
+			agentState = 'inference';
 			const response = await llm.call(memory.getContext(), getSystem(), toolDefs, signal);
 
 			// Keep text, tool_use, and reasoning blocks. Reasoning is needed for providers
@@ -316,6 +320,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 			const results: ContentBlock[] = [];
 			let shouldBreak: false | 'abort' | 'restart' = false;
 
+			agentState = 'tool_execution';
 			for (const tu of toolUses) {
 				if (signal.aborted) { shouldBreak = 'abort'; break; }
 				const tool = tools.find(t => t.name === tu.name);

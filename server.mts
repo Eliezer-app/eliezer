@@ -29,6 +29,7 @@ export function startServer(deps: ServerDeps) {
 
 		// GET /info/state — Agent operational state.
 		//   currentEvent  {source,type}|null  — event being processed, null when not processing
+		//   state         string              — idle | inference | tool_execution | compaction
 		//   queueDepth    number              — pending events waiting to be processed
 		//   tokensUsed    number              — cumulative LLM tokens consumed since startup
 		if (req.method === 'GET' && req.url === '/info/state') {
