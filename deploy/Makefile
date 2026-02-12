@@ -1,10 +1,10 @@
 APP_DIR := /opt/eliezer
 NODE_VERSION := 22
 
-.PHONY: setup deploy ssh-key install-deps install-app configure install-searxng enable status logs
+.PHONY: setup deploy ssh-key install-deps install-swap install-app configure install-searxng enable status logs
 
-# Full setup: deps → app → pause for .env → searxng → systemd
-setup: install-deps install-app configure install-searxng enable
+# Full setup: deps → swap → app → pause for .env → searxng → systemd
+setup: install-deps install-swap install-app configure install-searxng enable
 
 install-deps:
 	# Node.js 22 via nodesource
@@ -12,6 +12,19 @@ install-deps:
 	apt-get install -y nodejs build-essential sqlite3 bash-completion
 	# Docker (for SearXNG)
 	which docker || (curl -fsSL https://get.docker.com | sh)
+
+install-swap:
+	@if [ ! -f /swapfile ]; then \
+		SIZE=$$(grep MemTotal /proc/meminfo | awk '{print int($$2/1024)}'); \
+		echo "Creating $${SIZE}M swap..."; \
+		dd if=/dev/zero of=/swapfile bs=1M count=$$SIZE status=progress; \
+		chmod 600 /swapfile; \
+		mkswap /swapfile; \
+		swapon /swapfile; \
+		grep -q /swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab; \
+	else \
+		echo "Swap already exists"; \
+	fi
 
 install-app:
 	mkdir -p $(APP_DIR)/state
