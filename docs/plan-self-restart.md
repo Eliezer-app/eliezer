@@ -34,15 +34,15 @@ if (existsSync(RESTART_FLAG_FILE)) {
 }
 ```
 
-**On restart request:**
+**On restart request (main loop, after handleEvent returns 'restart'):**
 ```typescript
 writeFileSync(RESTART_FLAG_FILE, '');
-process.exit(0);
+break;
 ```
 
 ## Flow
 
-1. `restart_self` → flag file created → `process.exit(0)`
+1. `restart_self` tool returns `signal: 'restart'` → `handleEvent` returns `'restart'` → flag file written → main loop breaks → process exits cleanly
 2. Systemd `Restart=always` triggers restart after 5s
 3. New process: flag found → deleted → synthetic event pushed to queue
 4. Main loop wakes immediately, processes event, agent responds

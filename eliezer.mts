@@ -1,5 +1,5 @@
 import { config } from 'dotenv';
-import { mkdirSync, readFileSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs';
 import Database from 'better-sqlite3';
 import { Logger } from './log.mts';
 import { createLLM, ContentBlock } from './llm.mts';
@@ -34,6 +34,7 @@ const SEARCH_URL = requireEnv('SEARCH_URL');
 const HEARTBEAT_MS = Number(requireEnv('HEARTBEAT_MS').replace(/_/g, ''));
 const USER_TZ = requireEnv('USER_TZ');
 
+const RESTART_FLAG_FILE = `${DB_PATH}.restart-flag`;
 const log = new Logger();
 
 // DB
@@ -176,6 +177,11 @@ async function heartbeat() {
 
 log.info('eliezer starting');
 
+if (existsSync(RESTART_FLAG_FILE)) {
+	unlinkSync(RESTART_FLAG_FILE);
+	queue.push('system', 'restart', { message: 'You just restarted' });
+}
+
 while (true) {
 	const popPromise = queue.pop();
 	const event = await Promise.race([
@@ -210,6 +216,7 @@ while (true) {
 		const result = await handleEvent(event, abortController.signal);
 		if (result === 'restart') {
 			queue.done(event.id);
+			writeFileSync(RESTART_FLAG_FILE, '');
 			log.info('restart requested — exiting');
 			break;
 		}
