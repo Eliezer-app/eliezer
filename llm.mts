@@ -84,6 +84,7 @@ export class AnthropicLLM extends LLMBase {
 				signal: AbortSignal.any(signals),
 			});
 		} catch (e: any) {
+			if (e.name === 'AbortError') throw e;
 			if (e.name === 'TimeoutError') throw new Error(`LLM timeout after ${this.timeoutMs / 1000}s: ${url}`);
 			throw new Error(`LLM unreachable at ${url}: ${e.message}`);
 		}
@@ -132,6 +133,7 @@ export class OpenAILLM extends LLMBase {
 				signal: AbortSignal.any(signals),
 			});
 		} catch (e: any) {
+			if (e.name === 'AbortError') throw e;
 			if (e.name === 'TimeoutError') throw new Error(`LLM timeout after ${this.timeoutMs / 1000}s: ${url}`);
 			throw new Error(`LLM unreachable at ${url}: ${e.message}`);
 		}
