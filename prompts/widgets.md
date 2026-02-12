@@ -1,52 +1,82 @@
-# Widgets and Apps
+# Widgets
 
-You can create anything from a simple html widget to complex, full-feature, stateful and active applications.
-Follow the filesystem and framework structure described here to keep things clean.
+Widgets are interactive HTML/JS components embedded in chat messages via iframes.
 
-Start with picking name for your application.
-Place applications in `/opt/clawchat/apps/<app-name>`.
-Place ALL widgets in the correct path: `/opt/clawchat/apps/myapp/mywidget.html`.
-Any other path will not work. Widgets are not images, but they can reference images from `/opt/eliezer/chat-public/`.
+## Embedding Widgets
 
-Widgets are interactive HTML/JS components embedded in chat messages.
-Widgets can be stateful if needed. Simple state persistence is provided by the framework.
+Create `/opt/clawchat/apps/<my-app>/public/index.html`, then embed in a message using an iframe.
 
+Where `<my-app>` is the unique APP_ID: `/^[\w-]+$/`, so \w, \d, -, _ 
 
-## Inline Widget
+Example message:
 
-Send HTML inside a ```widget``` code block:
+Here is a nice Earth animation:
 
-    ```widget
-    <html>...</html>
-    ```
+<iframe src="/widget/earth/"></iframe>
 
-## File-based Widget
+## Static server
 
-Write an HTML file to `/opt/clawchat/apps/<app-name>/widget1.html`,
-(example: `/opt/clawchat/apps/myapp/widget1.html`) then reference it:
+The server serves static files from `/opt/clawchat/apps/<my-app>/public/` at `/widget/<my-app>/`.
 
-    ```widget:myapp/widget1.html
-    ```
+## API
 
-Path traversal (`..`) is blocked.
+State is scoped by app ID (same as <my-app> above). No initialization needed.
 
-## Framework API
+`GET /api/app-state/<app-id>` — Returns `{ state: {...}, version: N }`.
 
-A framework is auto-injected into every widget. Use `widget.*` methods:
+`POST /api/app-state/<app-id>` — JSON body: `{ state: {...} }`. Widgets with the same app ID share state and sync across instances via SSE.
 
-- `widget.onState(callback)` — receive state updates
-- `widget.getState(appId)` — request current state (call after onState)
-- `widget.setState(appId, state)` — persist state to server
-- `widget.request(appId, action, payload)` — call a server-side action (returns promise)
+`POST /api/widget-log/<app-id>` — JSON body is written as-is to `/opt/clawchat/apps/<app-id>/logs/<yyyy-mm-dd>.log`.
 
-Widgets with the same `appId` share state and sync live.
+## Auto Features
 
-## Example
+- **Resize** — Parent-side ResizeObserver auto-sizes the iframe to fit content (file-based only)
+- **Injected CSS** — `html, body { height: auto; min-height: 0; overflow: hidden; }` prevents scrollbars and viewport unit issues
+- **Sandbox** — File-based: none (same-origin, full trust). Data URL: `allow-scripts` only
+- **Lazy loading** — Widgets are created when within 500px of the viewport and destroyed when scrolled away
 
-```widget
+## Example: Counter (data URL, no state)
+
+```html
 <!DOCTYPE html>
 <html>
-<head><style>body { font-family: system-ui; padding: 16px; }</style></head>
+<head>
+  <style>
+    body { font-family: system-ui; padding: 16px; display: flex; gap: 16px; align-items: center; color: white; }
+    button { padding: 8px 16px; font-size: 16px; }
+    span { font-size: 24px; min-width: 40px; text-align: center; }
+  </style>
+</head>
+<body>
+  <button onclick="count--; update()">-</button>
+  <span id="v">0</span>
+  <button onclick="count++; update()">+</button>
+  <script>
+    let count = 0;
+    const update = () => document.getElementById('v').textContent = count;
+  </script>
+</body>
+</html>
+```
+
+Base64-encode and embed as <iframe src="data:text/html;base64,...">.
+
+## Example: File-based Widget with State
+
+`/opt/clawchat/apps/todo/public/index.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: system-ui; padding: 16px; }
+    input { padding: 8px; margin-right: 8px; }
+    button { padding: 8px 16px; }
+    ul { list-style: none; padding: 0; margin-top: 12px; }
+    li { padding: 8px; background: #f5f5f5; margin: 4px 0; border-radius: 4px; }
+  </style>
+</head>
 <body>
   <input id="inp" placeholder="Add task..." />
   <button onclick="add()">Add</button>
@@ -54,34 +84,96 @@ Widgets with the same `appId` share state and sync live.
   <script>
     const APP_ID = 'todo';
     let tasks = [];
-    function render() {
-      document.getElementById('list').innerHTML = tasks.map(t => `<li>${t}</li>`).join('');
+    // only enable logging when debugging, to keep chattiness low
+    const logEnabled = false;
+
+    async function apiDo(method, url, body) {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      return res.json();
     }
+
+    async function log(...args) {
+      if (!logEnabled) return
+      return apiDo('POST', `/api/widget-log/${APP_ID}`, args.length === 1 ? args[0] : args).catch(() => {});
+    }
+
+    async function loadState() {
+      try {
+        const data = await apiDo('GET', `/api/app-state/${APP_ID}`);
+        tasks = data.state?.tasks || [];
+        // to prevent logging coming out of order, wait for it
+        await log('loaded', tasks.length, 'tasks');
+        render();
+      } catch (e) { log('loadState error', e.message); }
+    }
+
+    function saveState() {
+      apiDo('POST', `/api/app-state/${APP_ID}`, { state: { tasks } });
+    }
+
+    function render() {
+      document.getElementById('list').innerHTML =
+        tasks.map(t => `<li>${t}</li>`).join('');
+    }
+
     function add() {
       const inp = document.getElementById('inp');
-      if (inp.value.trim()) { tasks.push(inp.value.trim()); inp.value = ''; render(); widget.setState(APP_ID, { tasks }); }
+      if (inp.value.trim()) {
+        tasks.push(inp.value.trim());
+        inp.value = '';
+        render();
+        saveState();
+      }
     }
-    widget.onState(state => { tasks = state?.tasks || []; render(); });
-    widget.getState(APP_ID);
+
+    loadState();
   </script>
 </body>
 </html>
 ```
 
+Embed: <iframe src="/widget/todo/"></iframe>
+
 ## Fullscreen
 
-Widgets have a fullscreen button (opens in new tab). Detect with:
+The ⧉ button on widget messages opens the widget in a new browser tab.
 
-```css
-body.widget-fullscreen { height: 100%; }
+## Server-side Endpoints
+
+Widgets can have custom server-side routes. Create `apps/<my-app>/index.mts` exporting a default function that receives an Express Router:
+
+```typescript
+import { Router } from 'express';
+
+export default (router: Router) => {
+  router.get('/weather', async (req, res) => {
+    const { lat, lon } = req.query;
+    // ... fetch from external API, query DB, etc.
+    res.json({ temp: 22, description: 'Clear' });
+  });
+};
 ```
 
-Note: curl/wget are not installed — use the wget tool to download files!
+Routes are mounted at `/widget/<my-app>/api/`. Widget calls `fetch('/widget/myapp/api/weather?lat=...')`.
 
-## Widget Debugging
+Handlers are loaded at server startup. After adding or changing `index.mts`, restart the server: `sudo systemctl restart clawchat`
 
-Use `widget.log(...)` to write to server-side log files. Acts similar to console.log().
-Logs are written to apps/<app-name>/<widget-name>/logs/<YYYY-MM-DD>.log.
-Only works for file-based widgets (widget:path/file.html), not inline widgets. Example:                                      
-  widget.log("initialized", { count: items.length });
-  widget.log("click", event.target.id);
+For a complete example with server-side weather API, see `apps/example/`.
+
+## File Structure
+
+```
+apps/
+  mywidget/
+    public/
+      index.html    # Entry point, served at /widget/mywidget/
+      style.css     # Optional additional files
+      ...
+    index.mts       # Optional server-side routes, mounted at /widget/mywidget/api/
+    logs/
+      2026-01-01.log
+```
