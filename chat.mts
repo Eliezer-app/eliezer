@@ -19,8 +19,8 @@ export class ChatClient {
 		return this.request('DELETE', `/messages/${messageId}`);
 	}
 
-	async typing(active: boolean): Promise<any> {
-		return this.request('POST', '/typing', { active });
+	async stateChange(state: string): Promise<any> {
+		return this.request('POST', '/agent/state-change', { state });
 	}
 
 	private async request(method: string, path: string, body?: unknown): Promise<any> {

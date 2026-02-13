@@ -109,6 +109,11 @@ const STATE_TOOL_EXECUTION = 'tool_execution' as const;
 const STATE_COMPACTION = 'compaction' as const;
 type AgentState = typeof STATE_IDLE | typeof STATE_INFERENCE | typeof STATE_TOOL_EXECUTION | typeof STATE_COMPACTION;
 let agentState: AgentState = STATE_IDLE;
+function setAgentState(state: AgentState) {
+	if (state === agentState) return;
+	agentState = state;
+	chat.stateChange(state).catch(() => {});
+}
 
 startServer({
 	port: parseInt(AGENT_PORT),
@@ -148,7 +153,7 @@ const TOOL_OUTPUT_PREVIEW_CHARS = 200;
 
 async function heartbeat() {
 	log.debug('heartbeat');
-	agentState = STATE_COMPACTION;
+	setAgentState(STATE_COMPACTION);
 	try {
 		const t0 = Date.now();
 		const result = await memory.compact(compactionLlm);
@@ -172,7 +177,7 @@ async function heartbeat() {
 	} catch (e: any) {
 		compactionLog.error('distillation failed', { error: e.message });
 	}
-	agentState = STATE_IDLE;
+	setAgentState(STATE_IDLE);
 	const dueCrons = cronManager.checkDue();
 	for (const { name, prompt } of dueCrons) {
 		log.info('cron due', { name });
@@ -238,7 +243,7 @@ while (true) {
 		}
 	}
 	abortController = null;
-	agentState = STATE_IDLE;
+	setAgentState(STATE_IDLE);
 	queue.done(event.id);
 }
 
@@ -254,8 +259,6 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 		memory.add('user', `Event: ${event.source}:${event.type}\n${JSON.stringify(event.payload)}`, chatMessageId);
 	}
 
-	// Show typing indicator while processing
-	await chat.typing(true);
 
 	try {
 		let compactionRetries = 3;
@@ -263,12 +266,11 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 			if (signal.aborted) {
 				log.info('event processing stopped by user');
 				memory.add('user', '[user stopped agent execution]');
-				await chat.typing(false);
 				await chat.send('default', '(stopped)').catch(() => {});
 				break;
 			}
 			if (compactionRetries > 0) {
-				agentState = STATE_COMPACTION;
+				setAgentState(STATE_COMPACTION);
 				try {
 					const result = await memory.compactTail(compactionLlm);
 					if (result) {
@@ -287,7 +289,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					if (compactionRetries === 0) compactionLog.error('emergency compaction exhausted, context may exceed budget');
 				}
 			}
-			agentState = STATE_INFERENCE;
+			setAgentState(STATE_INFERENCE);
 			const response = await llm.call(memory.getContext(), getSystem(), toolDefs, signal);
 
 			// Keep text, tool_use, and reasoning blocks. Reasoning is needed for providers
@@ -303,9 +305,6 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 			const toolUses = response.content.filter(b => b.type === 'tool_use') as
 				Array<Extract<ContentBlock, { type: 'tool_use' }>>;
 			if (!toolUses.length) {
-				// Turn off typing before sending final response
-				await chat.typing(false);
-				
 				const text = response.content
 					.filter(b => b.type === 'text')
 					.map(b => (b as Extract<ContentBlock, { type: 'text' }>).text)
@@ -324,7 +323,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 			const results: ContentBlock[] = [];
 			let shouldBreak: false | 'abort' | 'restart' = false;
 
-			agentState = STATE_TOOL_EXECUTION;
+			setAgentState(STATE_TOOL_EXECUTION);
 			for (const tu of toolUses) {
 				if (signal.aborted) { shouldBreak = 'abort'; break; }
 				const tool = tools.find(t => t.name === tu.name);
@@ -354,14 +353,11 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					memory.add('user', '[user stopped agent execution]');
 					await chat.send('default', '(stopped)').catch(() => {});
 				}
-				await chat.typing(false);
 				if (shouldBreak === 'restart') return 'restart';
 				break;
 			}
 		}
 	} catch (e) {
-		// Ensure typing is turned off on error
-		await chat.typing(false).catch((e: any) => log.error('chat typing off', { error: e.message }));
 		throw e;
 	}
 }

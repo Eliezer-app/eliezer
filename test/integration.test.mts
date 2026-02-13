@@ -63,7 +63,7 @@ describe('agent integration', () => {
 		expect(messages[1].role).toBe('user');
 		expect(messages[1].content).toContain('Hello agent');
 
-		// Text response should be auto-sent to chat (filter out typing calls)
+		// Text response should be auto-sent to chat (filter out state-change calls)
 		const chatCalls = await waitForCalls(MOCK_CHAT, 1);
 		const sendCalls = chatCalls.filter((c: any) => c.url === '/send');
 		expect(sendCalls.length).toBeGreaterThanOrEqual(1);
@@ -92,7 +92,7 @@ describe('agent integration', () => {
 
 		await postEvent('test', 'user_message', { content: 'Say hello' });
 
-		// Agent should call mock chat server (filter out typing calls)
+		// Agent should call mock chat server (filter out state-change calls)
 		const chatCalls = await waitForCalls(MOCK_CHAT, 1);
 		const sendCalls = chatCalls.filter((c: any) => c.url === '/send' && !c.body.type);
 		expect(sendCalls.length).toBeGreaterThanOrEqual(1);

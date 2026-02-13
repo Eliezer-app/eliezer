@@ -197,9 +197,11 @@ export class Memory {
 	async compact(llm: LLMBase): Promise<CompactionResult | null> {
 		if (!this.compaction) throw new Error('compaction not configured');
 		const { tokenBudget, groupGapSeconds, flowLimitSeconds, promptsDir } = this.compaction;
+		const FLOW_ZONE_TOKENS = tokenBudget / 3;
+		const COMPACT_MIN_TOKENS = tokenBudget / 4;
 
 		const tokens = this.tokenUsage();
-		if (tokens <= tokenBudget / 3) { log.debug('compact skip: tokens under threshold', { tokens: String(tokens), threshold: String(Math.floor(tokenBudget / 3)) }); return null; }
+		if (tokens <= FLOW_ZONE_TOKENS) { log.debug('compact skip: tokens under threshold', { tokens: String(tokens), threshold: String(Math.floor(FLOW_ZONE_TOKENS)) }); return null; }
 
 		const groups = getUncompressedGroups(this.db, groupGapSeconds);
 		if (groups.length < 2) { log.debug('compact skip: need 2+ groups', { groups: String(groups.length) }); return null; }
@@ -209,18 +211,18 @@ export class Memory {
 		const lastMsgTime = oldest.messages[oldest.messages.length - 1].created_at;
 		if (now - lastMsgTime < flowLimitSeconds) { log.debug('compact skip: oldest group too recent', { age: String(now - lastMsgTime), limit: String(flowLimitSeconds) }); return null; }
 
-		// Keep most recent groups totaling tokenBudget/3 in flow zone, compact the rest
-		const flowBudget = tokenBudget / 3;
 		let flowTokens = 0;
 		let cutoff = groups.length;
 		for (let i = groups.length - 1; i >= 0; i--) {
 			const groupTokens = groups[i].messages.reduce((sum, m) => sum + estimateTokens(m.content), 0);
-			if (flowTokens + groupTokens > flowBudget) break;
+			if (flowTokens + groupTokens > FLOW_ZONE_TOKENS) break;
 			flowTokens += groupTokens;
 			cutoff = i;
 		}
 		if (cutoff === 0) { log.debug('compact skip: all groups within flow budget'); return null; }
 		const eligible = groups.slice(0, cutoff);
+		const eligibleTokens = eligible.reduce((sum, g) => sum + g.messages.reduce((s, m) => s + estimateTokens(m.content), 0), 0);
+		if (eligibleTokens < COMPACT_MIN_TOKENS) { log.debug('compact skip: eligible tokens under threshold', { tokens: String(eligibleTokens), threshold: String(Math.floor(COMPACT_MIN_TOKENS)) }); return null; }
 		const batch: typeof eligible = [];
 		let chars = 0;
 		for (const g of eligible) {
