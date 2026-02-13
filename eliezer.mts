@@ -305,7 +305,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					.map(b => (b as Extract<ContentBlock, { type: 'text' }>).text)
 					.join('\n');
 				let sentMessageId: string | undefined;
-				if (text) {
+				if (text && text.trim() !== '[no response]') {
 					const res = await chat.send('default', text);
 					sentMessageId = res?.messageId;
 				}
