@@ -80,6 +80,13 @@ export class Memory {
 		).run(chatMessageId).changes > 0;
 	}
 
+	/** Delete a message and all messages after it (by rowid). Returns count deleted. */
+	forget(chatMessageId: string): number {
+		return this.db.prepare(
+			'DELETE FROM messages WHERE rowid >= (SELECT rowid FROM messages WHERE chat_message_id = ?)'
+		).run(chatMessageId).changes;
+	}
+
 	/** Compacted history formatted as text for the system prompt. */
 	getCompactedHistory(): string {
 		const compacted = getCompactedSummaries(this.db);

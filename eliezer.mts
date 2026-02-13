@@ -140,6 +140,7 @@ startServer({
 		abortController.abort();
 		return true;
 	},
+	forget: (messageId) => memory.forget(messageId),
 });
 
 const compactionLog = log.with({ module: 'Compaction' });

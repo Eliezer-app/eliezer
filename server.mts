@@ -13,10 +13,11 @@ export interface ServerDeps {
 	listCrons: () => CronRow[];
 	setCronEnabled: (name: string, enabled: boolean) => boolean;
 	stop: () => boolean;
+	forget: (messageId: string) => number;
 }
 
 export function startServer(deps: ServerDeps) {
-	const { port, queue, log, getHealth, getState, getMemory, listCrons, setCronEnabled, stop } = deps;
+	const { port, queue, log, getHealth, getState, getMemory, listCrons, setCronEnabled, stop, forget } = deps;
 
 	const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
 		// GET /info/health — Liveness check. No DB queries.
@@ -116,6 +117,25 @@ export function startServer(deps: ServerDeps) {
 			const stopped = stop();
 			log.info('stop requested', { wasProcessing: stopped });
 			json(res, 200, { ok: stopped });
+			return;
+		}
+
+		// POST /forget/from — Delete a message and all messages after it.
+		//   Request body:
+		//     messageId  string  — chat message ID to forget from
+		//   Response:
+		//     ok       boolean — true on success
+		//     deleted  number  — number of messages removed
+		if (req.method === 'POST' && req.url === '/forget/from') {
+			try {
+				const body = JSON.parse(await readBody(req));
+				if (!body.messageId) { json(res, 400, { ok: false, error: 'messageId required' }); return; }
+				const deleted = forget(body.messageId);
+				log.info('forget/from', { messageId: body.messageId, deleted: String(deleted) });
+				json(res, 200, { ok: true, deleted });
+			} catch (e: any) {
+				json(res, 400, { ok: false, error: e.message });
+			}
 			return;
 		}
 
