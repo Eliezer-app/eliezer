@@ -160,7 +160,15 @@ export default (router: Router) => {
 
 Routes are mounted at `/widget/<my-app>/api/`. Widget calls `fetch('/widget/myapp/api/weather?lat=...')`.
 
-Handlers are loaded at server startup. After adding or changing `index.mts`, restart the server: `sudo systemctl restart clawchat`
+
+### clawchat-widgets service
+Widget handlers are served by a different service.
+After making changes to `apps/<my-app>/index.mts`, restart clawchat-widgets service:
+`systemctl restart clawchat-widgets`
+And check logs:                                                                                                              
+`journalctl -u clawchat-widgets -f`
+
+
 
 For a complete example with server-side weather API, see `apps/example/`.
 
