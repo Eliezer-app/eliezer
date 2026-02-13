@@ -1,18 +1,10 @@
 import { config } from 'dotenv';
 config();
 import Database from 'better-sqlite3';
-import { Memory } from '../memory.mts';
 import { createLLM } from '../llm.mts';
-import { getCompactedSummaries } from '../compaction.mts';
+import { Compactor, getCompactedSummaries } from '../compaction.mts';
 
 const db = new Database(process.env.DB_PATH as string);
-const memory = new Memory(db, process.env.USER_TZ as string);
-memory.setCompactionConfig({
-	tokenBudget: 80_000,
-	groupGapSeconds: 60,
-	flowLimitSeconds: 0,
-	promptsDir: process.env.PROMPTS_DIR as string,
-});
 const llm = createLLM({
 	provider: process.env.COMPACTION_LLM_PROVIDER || process.env.LLM_PROVIDER as string,
 	apiKey: process.env.COMPACTION_LLM_API_KEY || process.env.LLM_API_KEY as string,
@@ -20,9 +12,15 @@ const llm = createLLM({
 	baseUrl: process.env.COMPACTION_LLM_BASE_URL || process.env.LLM_BASE_URL as string,
 	timeoutMs: 240_000,
 });
+const compactor = new Compactor(db, llm, process.env.USER_TZ as string, {
+	tokenBudget: 80_000,
+	groupGapSeconds: 60,
+	flowLimitSeconds: 0,
+	promptsDir: process.env.PROMPTS_DIR as string,
+});
 
 console.log('Running compaction...');
-const result = await memory.compact(llm);
+const result = await compactor.compact();
 console.log('Result:', result);
 
 const summaries = getCompactedSummaries(db);

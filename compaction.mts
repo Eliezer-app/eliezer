@@ -369,6 +369,151 @@ function formatForSummary(content: string, role: string, ts: string): Array<Reco
 /**
  * Query memory stats from DB.
  */
+export interface CompactorConfig {
+	tokenBudget: number;
+	groupGapSeconds: number;
+	flowLimitSeconds: number;
+	promptsDir: string;
+}
+
+/** Opaque handle returned by prepare(). */
+export interface CompactionPlan {
+	readonly _brand: 'CompactionPlan';
+}
+
+interface CompactionPlanInternal extends CompactionPlan {
+	group: Group;
+	priorContext: string | undefined;
+}
+
+export class Compactor {
+	private db: Database.Database;
+	private llm: LLMBase;
+	private timezone: string;
+	private config: CompactorConfig;
+
+	constructor(db: Database.Database, llm: LLMBase, timezone: string, config: CompactorConfig) {
+		this.db = db;
+		this.llm = llm;
+		this.timezone = timezone;
+		this.config = config;
+	}
+
+	private tokenUsage(): number {
+		const rows = this.db.prepare(
+			'SELECT content FROM messages WHERE NOT archived'
+		).all() as Array<{ content: string }>;
+		return rows.reduce((sum, r) => sum + estimateTokens(r.content), 0);
+	}
+
+	private buildPriorContext(): string | undefined {
+		const parts: string[] = [];
+		let mem = '';
+		try { mem = readFileSync(`${this.config.promptsDir}/memory.md`, 'utf-8').trim(); } catch {}
+		if (mem) parts.push(`## Memory\n${mem}`);
+		const rows = getCompactedSummaries(this.db);
+		if (rows.length) parts.push(`## Compacted history\n${rows.map(s => `[${s.role}] ${s.summary}`).join('\n\n')}`);
+		return parts.length ? parts.join('\n\n') : undefined;
+	}
+
+	/** Check if emergency compaction is needed. Returns opaque plan or null. */
+	prepare(): CompactionPlan | null {
+		const { tokenBudget, groupGapSeconds } = this.config;
+		if (this.tokenUsage() <= tokenBudget * 0.9) return null;
+		const groups = getUncompressedGroups(this.db, groupGapSeconds);
+		if (groups.length < 2) return null;
+		return { _brand: 'CompactionPlan', group: groups[0], priorContext: this.buildPriorContext() } as CompactionPlanInternal;
+	}
+
+	/** Emergency compaction: compress oldest group, retrying up to 3 times on failure. */
+	async compactTail(plan: CompactionPlan): Promise<CompactionResult | null> {
+		const { group, priorContext } = plan as CompactionPlanInternal;
+		let retries = 3;
+		while (retries > 0) {
+			try {
+				return await compressGroup(this.db, group, this.llm, this.config.promptsDir, this.timezone, priorContext);
+			} catch (e: any) {
+				retries--;
+				log.error('emergency compaction failed', { error: e.message, retriesLeft: String(retries) });
+				if (retries === 0) {
+					log.error('emergency compaction exhausted, context may exceed budget');
+					return null;
+				}
+			}
+		}
+		return null;
+	}
+
+	/** Idle compaction: compress one batch of eligible groups. */
+	async compact(): Promise<CompactionResult | null> {
+		const { tokenBudget, groupGapSeconds, flowLimitSeconds, promptsDir } = this.config;
+		const FLOW_ZONE_TOKENS = tokenBudget / 3;
+		const COMPACT_MIN_TOKENS = tokenBudget / 4;
+
+		const tokens = this.tokenUsage();
+		if (tokens <= FLOW_ZONE_TOKENS) { log.debug('compact skip: tokens under threshold', { tokens: String(tokens), threshold: String(Math.floor(FLOW_ZONE_TOKENS)) }); return null; }
+
+		const groups = getUncompressedGroups(this.db, groupGapSeconds);
+		if (groups.length < 2) { log.debug('compact skip: need 2+ groups', { groups: String(groups.length) }); return null; }
+
+		const now = Math.floor(Date.now() / 1000);
+		const oldest = groups[0];
+		const lastMsgTime = oldest.messages[oldest.messages.length - 1].created_at;
+		if (now - lastMsgTime < flowLimitSeconds) { log.debug('compact skip: oldest group too recent', { age: String(now - lastMsgTime), limit: String(flowLimitSeconds) }); return null; }
+
+		let flowTokens = 0;
+		let cutoff = groups.length;
+		for (let i = groups.length - 1; i >= 0; i--) {
+			const groupTokens = groups[i].messages.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+			if (flowTokens + groupTokens > FLOW_ZONE_TOKENS) break;
+			flowTokens += groupTokens;
+			cutoff = i;
+		}
+		if (cutoff === 0) { log.debug('compact skip: all groups within flow budget'); return null; }
+		const eligible = groups.slice(0, cutoff);
+		const eligibleTokens = eligible.reduce((sum, g) => sum + g.messages.reduce((s, m) => s + estimateTokens(m.content), 0), 0);
+		if (eligibleTokens < COMPACT_MIN_TOKENS) { log.debug('compact skip: eligible tokens under threshold', { tokens: String(eligibleTokens), threshold: String(Math.floor(COMPACT_MIN_TOKENS)) }); return null; }
+		const batch: typeof eligible = [];
+		let chars = 0;
+		for (const g of eligible) {
+			const groupChars = g.messages.reduce((sum, m) => sum + m.content.length, 0);
+			if (chars > 0 && chars + groupChars > BATCH_CHARS) break;
+			batch.push(g);
+			chars += groupChars;
+		}
+
+		return compressGroups(this.db, batch, this.llm, promptsDir, this.timezone);
+	}
+
+	/** Distill oldest compacted summaries into memory.md. */
+	async distill(): Promise<{ distilled: number; archived: number } | null> {
+		const { tokenBudget, promptsDir } = this.config;
+
+		const rows = this.db.prepare(
+			'SELECT id, summary FROM compacted WHERE NOT archived ORDER BY id'
+		).all() as Array<{ id: number; summary: string }>;
+
+		const compactedTokens = rows.reduce((sum, r) => sum + estimateTokens(r.summary), 0);
+		if (compactedTokens <= tokenBudget / 3) return null;
+
+		const half = Math.ceil(rows.length / 2);
+		const toDistill = rows.slice(0, half);
+		const cutoffId = toDistill[toDistill.length - 1].id;
+
+		await distillToMemory(this.db, this.llm, `${promptsDir}/memory.md`, toDistill.map(r => r.summary));
+
+		const archived = this.db.prepare(
+			'UPDATE compacted SET archived = 1 WHERE NOT archived AND id <= ?'
+		).run(cutoffId).changes;
+
+		this.db.prepare(
+			"INSERT INTO compaction_log (op, group_start, group_end, tokens_before, tokens_after) VALUES ('distill', ?, ?, ?, 0)"
+		).run(toDistill[0].id, cutoffId, compactedTokens);
+
+		return { distilled: toDistill.length, archived };
+	}
+}
+
 export function getMemoryStats(db: Database.Database, memoryPath: string, tokenBudget: number, systemText: string, memoryText: string) {
 	const flow = db.prepare(
 		'SELECT count(*) as count FROM messages WHERE NOT archived'

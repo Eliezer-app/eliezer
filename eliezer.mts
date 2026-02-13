@@ -11,7 +11,7 @@ import { createSearchHistoryTool } from './tool-search-history.mts';
 import { SearXNGProvider } from './search.mts';
 import { CronManager } from './cron.mts';
 import { ChatClient, createChatTool } from './chat.mts';
-import { getMemoryStats } from './compaction.mts';
+import { Compactor, getMemoryStats } from './compaction.mts';
 import { redactSecrets } from './detect-secret.mts';
 
 config();
@@ -70,7 +70,7 @@ function parseDuration(s: string, defaultSec: number): number {
 		default: return n;
 	}
 }
-memory.setCompactionConfig({
+const compactor = new Compactor(db, compactionLlm, USER_TZ, {
 	tokenBudget: CONTEXT_WINDOW,
 	groupGapSeconds: parseDuration(process.env.COMPACTION_GROUP_GAP || '1m', 60),
 	flowLimitSeconds: parseDuration(process.env.COMPACTION_FLOW_LIMIT || '1m', 60),
@@ -113,7 +113,8 @@ let agentState: AgentState = STATE_IDLE;
 function setAgentState(state: AgentState) {
 	if (state === agentState) return;
 	agentState = state;
-	chat.stateChange(state).catch(() => {});
+	log.debug('state-change', { state });
+	chat.stateChange(state).catch((e: any) => log.debug('state-change post failed', { state, error: e.message }));
 }
 
 startServer({
@@ -157,7 +158,7 @@ async function heartbeat() {
 	setAgentState(STATE_COMPACTION);
 	try {
 		const t0 = Date.now();
-		const result = await memory.compact(compactionLlm);
+		const result = await compactor.compact();
 		if (result) compactionLog.info('idle compaction', {
 			groups: String(result.groups), messages: String(result.messages),
 			anchors: String(result.anchors),
@@ -170,7 +171,7 @@ async function heartbeat() {
 	}
 	try {
 		const t0 = Date.now();
-		const distilled = await memory.distill(compactionLlm);
+		const distilled = await compactor.distill();
 		if (distilled) compactionLog.info('distillation', {
 			distilled: String(distilled.distilled), archived: String(distilled.archived),
 			duration: ((Date.now() - t0) / 1000).toFixed(1) + 's',
@@ -262,7 +263,6 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 
 
 	try {
-		let compactionRetries = 3;
 		while (true) {
 			if (signal.aborted) {
 				log.info('event processing stopped by user');
@@ -270,24 +270,17 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 				await chat.send('default', '(stopped)').catch(() => {});
 				break;
 			}
-			if (compactionRetries > 0) {
+			const cp = compactor.prepare();
+			if (cp) {
 				setAgentState(STATE_COMPACTION);
-				try {
-					const result = await memory.compactTail(compactionLlm);
-					if (result) {
-						compactionLog.info('emergency compaction', {
-							groups: String(result.groups), messages: String(result.messages),
-							anchors: String(result.anchors),
-							tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter),
-							ratio: (result.tokensAfter / result.tokensBefore * 100).toFixed(1) + '%',
-						});
-					} else {
-						compactionRetries = 0;
-					}
-				} catch (e: any) {
-					compactionRetries--;
-					compactionLog.error('emergency compaction failed', { error: e.message, retriesLeft: String(compactionRetries) });
-					if (compactionRetries === 0) compactionLog.error('emergency compaction exhausted, context may exceed budget');
+				const result = await compactor.compactTail(cp);
+				if (result) {
+					compactionLog.info('emergency compaction', {
+						groups: String(result.groups), messages: String(result.messages),
+						anchors: String(result.anchors),
+						tokensBefore: String(result.tokensBefore), tokensAfter: String(result.tokensAfter),
+						ratio: (result.tokensAfter / result.tokensBefore * 100).toFixed(1) + '%',
+					});
 				}
 			}
 			setAgentState(STATE_INFERENCE);

@@ -26,6 +26,24 @@ async function waitForCalls(url: string, minCalls: number, timeoutMs = 10_000): 
 	throw new Error(`Expected ${minCalls} calls to ${url} within ${timeoutMs}ms`);
 }
 
+async function waitForStateChanges(url: string, timeoutMs = 10_000): Promise<string[]> {
+	const start = Date.now();
+	while (Date.now() - start < timeoutMs) {
+		const calls = await fetch(`${url}/calls`).then(r => r.json());
+		const states: string[] = calls
+			.filter((c: any) => c.url === '/state-changed')
+			.map((c: any) => c.body.state);
+		// Find event processing: starts at first inference, ends at idle
+		const firstInference = states.indexOf('inference');
+		if (firstInference >= 0) {
+			const eventStates = states.slice(firstInference);
+			if (eventStates[eventStates.length - 1] === 'idle') return eventStates;
+		}
+		await new Promise(r => setTimeout(r, 200));
+	}
+	throw new Error(`Timed out waiting for state changes`);
+}
+
 function postEvent(source: string, type: string, payload = {}) {
 	return fetch(`${AGENT}/events`, {
 		method: 'POST',
@@ -125,5 +143,14 @@ describe('agent integration', () => {
 		const body = await fetch(`${AGENT}/info/state`).then(r => r.json());
 		expect(body.tokensUsed).toBeGreaterThan(0);
 		expect(body).toHaveProperty('queueDepth');
+	}, 15_000);
+
+	it('emits state-change events for each processing phase', async () => {
+		await postEvent('test', 'user_message', { content: 'state test' });
+
+		// Mock LLM returns tool_use on first call, text on second.
+		// Expected state transitions: inference → tool_execution → inference → idle
+		const stateChanges = await waitForStateChanges(MOCK_CHAT);
+		expect(stateChanges).toEqual(['inference', 'tool_execution', 'inference', 'idle']);
 	}, 15_000);
 });

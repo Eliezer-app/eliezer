@@ -22,7 +22,7 @@ export class ChatClient {
 	}
 
 	async stateChange(state: string): Promise<any> {
-		return this.request('POST', '/agent/state-change', { state });
+		return this.request('POST', '/state-changed', { state });
 	}
 
 	private async request(method: string, path: string, body?: unknown): Promise<any> {

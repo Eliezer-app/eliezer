@@ -1,9 +1,8 @@
 import { config } from 'dotenv';
 config();
 import Database from 'better-sqlite3';
-import { Memory } from '../memory.mts';
 import { createLLM } from '../llm.mts';
-import { getCompactedSummaries, getUncompressedGroups } from '../compaction.mts';
+import { Compactor, getCompactedSummaries, getUncompressedGroups } from '../compaction.mts';
 
 const db = new Database(process.env.DB_PATH as string);
 const PROMPTS_DIR = process.env.PROMPTS_DIR as string;
@@ -14,10 +13,8 @@ const llm = createLLM({
 	baseUrl: process.env.COMPACTION_LLM_BASE_URL || process.env.LLM_BASE_URL as string,
 	timeoutMs: 240_000,
 });
-
-const memory = new Memory(db, process.env.USER_TZ as string);
 // Set budget to 1 so the 90% threshold is always exceeded
-memory.setCompactionConfig({
+const compactor = new Compactor(db, llm, process.env.USER_TZ as string, {
 	tokenBudget: 1,
 	groupGapSeconds: 60,
 	flowLimitSeconds: 0,
@@ -30,7 +27,9 @@ if (groups.length < 2) { console.log('Need at least 2 groups'); process.exit(0);
 console.log(`Oldest group: rowids ${groups[0].start}-${groups[0].end}, ${groups[0].messages.length} messages\n`);
 
 console.log('--- Calling compactTail (emergency compaction) ---\n');
-const result = await memory.compactTail(llm);
+const cp = compactor.prepare();
+if (!cp) { console.log('prepare returned null'); process.exit(1); }
+const result = await compactor.compactTail(cp);
 if (!result) { console.log('compactTail returned null'); process.exit(1); }
 console.log(`Result: ${result.anchors} anchors, ${result.messages} messages, ${result.tokensBefore} → ${result.tokensAfter} tokens (${(result.tokensAfter / result.tokensBefore * 100).toFixed(1)}%)\n`);
 

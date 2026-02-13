@@ -69,6 +69,7 @@ services:
       SEARCH_URL: http://localhost:8888
       CONTEXT_WINDOW: 200000
       USER_TZ: UTC
+      CHAT_PUBLIC_DIR: /tmp
       LOG_LEVEL: debug
     depends_on:
       mock-llm:
