@@ -33,6 +33,7 @@ const PROMPTS_DIR = requireEnv('PROMPTS_DIR');
 const SEARCH_URL = requireEnv('SEARCH_URL');
 const HEARTBEAT_MS = Number(requireEnv('HEARTBEAT_MS').replace(/_/g, ''));
 const USER_TZ = requireEnv('USER_TZ');
+const CHAT_PUBLIC_DIR = requireEnv('CHAT_PUBLIC_DIR');
 
 const RESTART_FLAG_FILE = `${DB_PATH}.restart-flag`;
 const log = new Logger();
@@ -76,7 +77,7 @@ memory.setCompactionConfig({
 	promptsDir: PROMPTS_DIR,
 });
 const searchProvider = new SearXNGProvider(SEARCH_URL);
-const tools = [...createTools(compactionLlm), createChatTool(chat), createSearchHistoryTool(db), createScheduleTool(cronManager), createWebSearchTool(searchProvider, compactionLlm)];
+const tools = [...createTools(compactionLlm), createChatTool(chat, CHAT_PUBLIC_DIR), createSearchHistoryTool(db), createScheduleTool(cronManager), createWebSearchTool(searchProvider, compactionLlm)];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
 function readPrompt(name: string): string {

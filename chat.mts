@@ -1,3 +1,5 @@
+import { existsSync } from 'fs';
+import { resolve, normalize } from 'path';
 import { Tool, ToolResult } from './tools.mts';
 
 export class ChatClient {
@@ -7,8 +9,8 @@ export class ChatClient {
 		this.baseUrl = baseUrl.replace(/\/$/, '');
 	}
 
-	async send(conversationId: string, content: string, type?: string): Promise<any> {
-		return this.request('POST', '/send', { conversationId, content, ...(type ? { type } : {}) });
+	async send(conversationId: string, content: string, type?: string, attachment?: { filename: string }): Promise<any> {
+		return this.request('POST', '/send', { conversationId, content, ...(type ? { type } : {}), ...(attachment ? { attachment } : {}) });
 	}
 
 	async updateMessage(messageId: string, content: string): Promise<any> {
@@ -34,10 +36,10 @@ export class ChatClient {
 	}
 }
 
-export function createChatTool(client: ChatClient): Tool {
+export function createChatTool(client: ChatClient, chatPublicDir: string): Tool {
 	return {
 		name: 'chat',
-		description: 'Manage chat messages. Actions: update (edit a sent message), delete (remove a message). A send action also exists but is rarely needed — your plain text responses are automatically delivered to chat.',
+		description: `Manage chat messages. Actions: update (edit a sent message), delete (remove a message), send (send a message). Avoid using send unless you are sending an attachment — your plain text responses are automatically delivered to chat. To attach a file, write it to ${chatPublicDir}/ and include attachment.filename.`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -45,6 +47,7 @@ export function createChatTool(client: ChatClient): Tool {
 				conversationId: { type: 'string', description: 'Required for send' },
 				messageId: { type: 'string', description: 'Required for update/delete' },
 				content: { type: 'string', description: 'Required for send/update' },
+				attachment: { type: 'object', properties: { filename: { type: 'string', description: 'Filename (not path) of a file already written to the chat-public directory' } }, required: ['filename'] },
 			},
 			required: ['action'],
 		},
@@ -53,7 +56,14 @@ export function createChatTool(client: ChatClient): Tool {
 				let result: any;
 				switch (input.action) {
 					case 'send':
-						result = await client.send(input.conversationId ?? 'default', input.content);
+						if (input.attachment) {
+							const full = resolve(chatPublicDir, input.attachment.filename);
+							if (!normalize(full).startsWith(resolve(chatPublicDir) + '/'))
+								return { content: 'attachment filename must not escape chat-public directory', isError: true };
+							if (!existsSync(full))
+								return { content: `attachment not found: ${input.attachment.filename}`, isError: true };
+						}
+						result = await client.send(input.conversationId ?? 'default', input.content, undefined, input.attachment);
 						break;
 					case 'update':
 						result = await client.updateMessage(input.messageId, input.content);
