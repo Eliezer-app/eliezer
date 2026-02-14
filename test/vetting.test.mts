@@ -50,4 +50,23 @@ describe('vetContent', () => {
 		const result = await vetContent(llm, 'some text', 'web search');
 		expect(result.safe).toBe(false);
 	});
+
+	it('samples first+last for large content', async () => {
+		let captured = '';
+		const llm = new MockVettingLLM('{"safe": true}');
+		const origCall = llm.call.bind(llm);
+		llm.call = async (messages: Message[], system: string, tools?: ToolDef[]) => {
+			captured = typeof messages[0].content === 'string' ? messages[0].content : '';
+			return origCall(messages, system, tools);
+		};
+		const head = 'HEAD'.repeat(10_000);  // 40k chars
+		const tail = 'TAIL'.repeat(10_000);  // 40k chars
+		const middle = 'X'.repeat(100_000);
+		const result = await vetContent(llm, head + middle + tail, 'test');
+		expect(result.safe).toBe(true);
+		expect(captured).toContain('HEAD');
+		expect(captured).toContain('TAIL');
+		expect(captured).toContain('chars omitted');
+		expect(captured).not.toContain('X'.repeat(100));
+	});
 });

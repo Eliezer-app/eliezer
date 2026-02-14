@@ -35,7 +35,7 @@ const PASSTHROUGH_EXTENSIONS = [
 	'.sqlite3',
 ];
 
-const MAX_SIZE_AUTOVET = 500_000; // 500KB — text files under this are auto-vetted by the security LLM
+const MAX_SIZE_AUTOVET = 10_000_000; // 10MB — text files under this are auto-vetted (sampled first+last 25k chars)
 
 export interface ToolResult {
 	content: string;
