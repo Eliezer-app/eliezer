@@ -110,12 +110,19 @@ const STATE_TOOL_EXECUTION = 'tool_execution' as const;
 const STATE_COMPACTION = 'compaction' as const;
 type AgentState = typeof STATE_IDLE | typeof STATE_INFERENCE | typeof STATE_TOOL_EXECUTION | typeof STATE_COMPACTION;
 let agentState: AgentState = STATE_IDLE;
-async function setAgentState(state: AgentState) {
+let debouncedState: AgentState = STATE_IDLE;
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+function setAgentState(state: AgentState) {
 	if (state === agentState) return;
 	agentState = state;
 	log.debug('state-change', { state });
-	try { await chat.stateChange(state); }
-	catch (e: any) { log.error('state-change post failed', { state, error: e.message }); }
+	if (debounceTimer) clearTimeout(debounceTimer);
+	debounceTimer = setTimeout(async () => {
+		if (debouncedState === agentState) return;
+		debouncedState = agentState;
+		try { await chat.stateChange(debouncedState); }
+		catch (e: any) { log.error('state-change post failed', { state: debouncedState, error: e.message }); }
+	}, 100);
 }
 
 startServer({
@@ -125,7 +132,7 @@ startServer({
 	getHealth: () => ({ status: 'ok', uptime: Math.floor((Date.now() - startTime) / 1000) }),
 	getState: () => ({
 		currentEvent,
-		state: agentState,
+		state: debouncedState,
 		queueDepth: queue.depth(),
 		tokensUsed: llm.tokensUsed,
 	}),
@@ -157,7 +164,7 @@ const TOOL_OUTPUT_PREVIEW_CHARS = 200;
 
 async function heartbeat() {
 	log.debug('heartbeat');
-	await setAgentState(STATE_COMPACTION);
+	setAgentState(STATE_COMPACTION);
 	try {
 		const t0 = Date.now();
 		const result = await compactor.compact();
@@ -181,7 +188,7 @@ async function heartbeat() {
 	} catch (e: any) {
 		compactionLog.error('distillation failed', { error: e.message });
 	}
-	await setAgentState(STATE_IDLE);
+	setAgentState(STATE_IDLE);
 	const dueCrons = cronManager.checkDue();
 	for (const { name, prompt } of dueCrons) {
 		log.info('cron due', { name });
@@ -247,7 +254,7 @@ while (true) {
 		}
 	}
 	abortController = null;
-	await setAgentState(STATE_IDLE);
+	setAgentState(STATE_IDLE);
 	queue.done(event.id);
 }
 
@@ -274,7 +281,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 			}
 			const cp = compactor.prepare();
 			if (cp) {
-				await setAgentState(STATE_COMPACTION);
+				setAgentState(STATE_COMPACTION);
 				const result = await compactor.compactTail(cp);
 				if (result) {
 					compactionLog.info('emergency compaction', {
@@ -285,7 +292,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					});
 				}
 			}
-			await setAgentState(STATE_INFERENCE);
+			setAgentState(STATE_INFERENCE);
 			const response = await llm.call(memory.getContext(), getSystem(), toolDefs, signal);
 
 			// Keep text, tool_use, and reasoning blocks. Reasoning is needed for providers
@@ -319,7 +326,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 			const results: ContentBlock[] = [];
 			let shouldBreak: false | 'abort' | 'restart' = false;
 
-			await setAgentState(STATE_TOOL_EXECUTION);
+			setAgentState(STATE_TOOL_EXECUTION);
 			for (const tu of toolUses) {
 				if (signal.aborted) { shouldBreak = 'abort'; break; }
 				const tool = tools.find(t => t.name === tu.name);

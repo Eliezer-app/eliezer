@@ -26,23 +26,6 @@ async function waitForCalls(url: string, minCalls: number, timeoutMs = 10_000): 
 	throw new Error(`Expected ${minCalls} calls to ${url} within ${timeoutMs}ms`);
 }
 
-async function waitForStateChanges(url: string, timeoutMs = 10_000): Promise<string[]> {
-	const start = Date.now();
-	while (Date.now() - start < timeoutMs) {
-		const calls = await fetch(`${url}/calls`).then(r => r.json());
-		const states: string[] = calls
-			.filter((c: any) => c.url === '/state-changed')
-			.map((c: any) => c.body.state);
-		// Find event processing: starts at first inference, ends at idle
-		const firstInference = states.indexOf('inference');
-		if (firstInference >= 0) {
-			const eventStates = states.slice(firstInference);
-			if (eventStates[eventStates.length - 1] === 'idle') return eventStates;
-		}
-		await new Promise(r => setTimeout(r, 200));
-	}
-	throw new Error(`Timed out waiting for state changes`);
-}
 
 function postEvent(source: string, type: string, payload = {}) {
 	return fetch(`${AGENT}/events`, {
@@ -145,12 +128,30 @@ describe('agent integration', () => {
 		expect(body).toHaveProperty('queueDepth');
 	}, 15_000);
 
-	it('emits state-change events for each processing phase', async () => {
+	it('debounced state settles to idle after event processing', async () => {
 		await postEvent('test', 'user_message', { content: 'state test' });
+		await waitForCalls(MOCK_LLM, 1);
 
-		// Mock LLM returns tool_use on first call, text on second.
-		// Expected state transitions: inference → tool_execution → inference → idle
-		const stateChanges = await waitForStateChanges(MOCK_CHAT);
-		expect(stateChanges).toEqual(['inference', 'tool_execution', 'inference', 'idle']);
+		// Poll until agent reports idle via the debounced state endpoint
+		const start = Date.now();
+		while (Date.now() - start < 10_000) {
+			const state = await fetch(`${AGENT}/info/state`).then(r => r.json());
+			if (state.state === 'idle') break;
+			await new Promise(r => setTimeout(r, 100));
+		}
+		await new Promise(r => setTimeout(r, 300)); // let debounce timer settle
+
+		const state = await fetch(`${AGENT}/info/state`).then(r => r.json());
+		expect(state.state).toBe('idle');
+
+		// Any state-change POSTs that survived the debounce should end with idle.
+		// In a fast mock environment, debounce may suppress all transient states.
+		const chatCalls = await fetch(`${MOCK_CHAT}/calls`).then(r => r.json());
+		const stateChanges: string[] = chatCalls
+			.filter((c: any) => c.url === '/state-changed')
+			.map((c: any) => c.body.state);
+		if (stateChanges.length > 0) {
+			expect(stateChanges[stateChanges.length - 1]).toBe('idle');
+		}
 	}, 15_000);
 });
