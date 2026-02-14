@@ -27,9 +27,10 @@ install-swap:
 	fi
 
 install-app:
-	mkdir -p $(APP_DIR)/state
+	mkdir -p $(APP_DIR)/state $(APP_DIR)/prompts
 	test -d $(APP_DIR)/.git || git clone https://github.com/clawchat/eliezer.git $(APP_DIR)
 	cd $(APP_DIR) && npm ci
+	cp -rn $(APP_DIR)/prompts-default/* $(APP_DIR)/prompts/
 	# Gate curl/wget to localhost only
 	chmod +x $(APP_DIR)/deploy/curl-gate.sh $(APP_DIR)/deploy/wget-gate.sh
 	ln -sf $(APP_DIR)/deploy/curl-gate.sh /usr/local/bin/curl

@@ -6,5 +6,6 @@ logs/
 state/
 export/
 chat-public/
+prompts/
 .DS_Store
 .idea

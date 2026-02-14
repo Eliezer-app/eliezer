@@ -1,6 +1,7 @@
 .PHONY: dev stop shell logs clean clean-compacted test test-up test-down export export-html api-docs dump-system status prod-start prod-stop prod-deploy prod-git-unlock prod-logs prod-logs-all prod-logs-clear
 
 dev: stop test-down
+	@test -d prompts || (mkdir -p prompts && cp -rn prompts-default/* prompts/)
 	rm -f state/eliezer.log
 	docker compose up -d --force-recreate
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \

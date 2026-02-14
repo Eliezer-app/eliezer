@@ -103,7 +103,7 @@ describe('compressGroup', () => {
 		insertMessage(db, 'assistant', 'world', t + 5, 'msg2');
 
 		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts', 'UTC');
+		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
 
 		// Source messages should be archived
 		const msgs = db.prepare('SELECT chat_message_id, archived FROM messages ORDER BY rowid').all() as any[];
@@ -122,7 +122,7 @@ describe('compressGroup', () => {
 		insertMessage(db, 'assistant', 'world', t + 5);
 
 		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts', 'UTC');
+		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
 
 		const log = db.prepare('SELECT * FROM compaction_log').all() as any[];
 		expect(log).toHaveLength(1);
@@ -143,10 +143,10 @@ describe('getCompactedSummaries', () => {
 		insertMessage(db, 'assistant', 'msg4', t + 205);
 
 		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts', 'UTC');
+		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
 		// Second group now becomes the only unarchived group
 		const groups2 = identifyGroups(db, 60);
-		await compressGroup(db, groups2[0], fakeLlm, 'prompts', 'UTC');
+		await compressGroup(db, groups2[0], fakeLlm, 'prompts-default','UTC');
 
 		const summaries = getCompactedSummaries(db);
 		expect(summaries).toHaveLength(2);
@@ -161,7 +161,7 @@ describe('getCompactedSummaries', () => {
 		insertMessage(db, 'assistant', 'msg2', t + 5);
 
 		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts', 'UTC');
+		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
 		expect(getCompactedSummaries(db)).toHaveLength(1);
 
 		db.prepare('UPDATE compacted SET archived = 1').run();
@@ -179,7 +179,7 @@ describe('getUncompressedGroups', () => {
 		insertMessage(db, 'user', 'msg3', t + 200);
 
 		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts', 'UTC');
+		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
 
 		const uncompressed = getUncompressedGroups(db, 60);
 		expect(uncompressed).toHaveLength(1);
@@ -198,7 +198,7 @@ describe('getCompactedHistory', () => {
 		insertMessage(db, 'user', 'second', t + 200);
 
 		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts', 'UTC');
+		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
 
 		const history = mem.getCompactedHistory();
 		expect(history).toContain('Agent:');
@@ -224,7 +224,7 @@ describe('getCompactedHistory', () => {
 		insertMessage(db, 'user', 'recent msg', t + 200);
 
 		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts', 'UTC');
+		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
 
 		const context = mem.getContext();
 		const allText = context.map(m => typeof m.content === 'string' ? m.content : '').join(' ');
@@ -245,7 +245,7 @@ describe('getMemoryStats', () => {
 		insertMessage(db, 'assistant', 'old2', t + 205);
 
 		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts', 'UTC');
+		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
 
 		const stats = getMemoryStats(db, '/nonexistent/memory.md', 80000, 'system prompt text', 'memory text');
 		expect(stats.context.flow.messages).toBe(2);

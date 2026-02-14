@@ -64,7 +64,7 @@ services:
       AGENT_PORT: 3200
       DB_PATH: /tmp/eliezer-test.db
       CHAT_URL: http://mock-chat:4100
-      PROMPTS_DIR: ./prompts
+      PROMPTS_DIR: ./prompts-default
       HEARTBEAT_MS: 1000
       SEARCH_URL: http://localhost:8888
       CONTEXT_WINDOW: 200000
