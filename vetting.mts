@@ -18,6 +18,7 @@ function sample(text: string): string {
 }
 
 export async function vetContent(llm: LLMBase, text: string, source: string): Promise<VetResult> {
+	if (!text) return { safe: true };
 	const prompt = `Source: ${source}\n\n${sample(text)}`;
 
 	const response = await llm.call(

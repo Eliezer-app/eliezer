@@ -19,6 +19,16 @@ class MockVettingLLM extends LLMBase {
 }
 
 describe('vetContent', () => {
+	it('returns safe for empty content without calling LLM', async () => {
+		let called = false;
+		const llm = new MockVettingLLM('{"safe": true}');
+		const origCall = llm.call.bind(llm);
+		llm.call = async (m: Message[], s: string, t?: ToolDef[]) => { called = true; return origCall(m, s, t); };
+		const result = await vetContent(llm, '', 'test');
+		expect(result.safe).toBe(true);
+		expect(called).toBe(false);
+	});
+
 	it('returns safe for benign content', async () => {
 		const llm = new MockVettingLLM('{"safe": true}');
 		const result = await vetContent(llm, 'A normal web page about cooking', 'web search');
@@ -49,6 +59,27 @@ describe('vetContent', () => {
 		const llm = new MockVettingLLM('{broken json');
 		const result = await vetContent(llm, 'some text', 'web search');
 		expect(result.safe).toBe(false);
+	});
+
+	it('passes full text when exactly at sample limit', async () => {
+		let captured = '';
+		const llm = new MockVettingLLM('{"safe": true}');
+		const origCall = llm.call.bind(llm);
+		llm.call = async (m: Message[], s: string, t?: ToolDef[]) => { captured = typeof m[0].content === 'string' ? m[0].content : ''; return origCall(m, s, t); };
+		const text = 'A'.repeat(50_000);
+		await vetContent(llm, text, 'test');
+		expect(captured).not.toContain('omitted');
+		expect(captured).toContain('A'.repeat(50_000));
+	});
+
+	it('samples at boundary+1', async () => {
+		let captured = '';
+		const llm = new MockVettingLLM('{"safe": true}');
+		const origCall = llm.call.bind(llm);
+		llm.call = async (m: Message[], s: string, t?: ToolDef[]) => { captured = typeof m[0].content === 'string' ? m[0].content : ''; return origCall(m, s, t); };
+		const text = 'A'.repeat(50_001);
+		await vetContent(llm, text, 'test');
+		expect(captured).toContain('1 chars omitted');
 	});
 
 	it('samples first+last for large content', async () => {

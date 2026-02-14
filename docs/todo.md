@@ -1,25 +1,11 @@
 # TODO
 
-- [ ] **App/widget development**
-  Integrate app and widget development into the agent workflow.
-
 - [ ] **File browser support**
   Browse and navigate files from the chat UI.
-
-- [ ] **Schedule policy**
-  Define agent access/policy for enabling/disabling crons.
-  What can the agent toggle on its own vs what requires user approval.
-
-- [ ] **Resilience / Recovery**
-  Crash handling, supervision (systemd, wrapper script), state save/rollback.
-  Recover from git after catastrophic failure.
 
 - [ ] **Agents**
   Sub-agents for complex tasks. Opus for architectural reasoning, Sonnet for execution.
   Specialized agents (code review, testing, research).
-
-- [ ] **Plugin management**
-  Plugin registry, auto-start on boot, health checks.
 
 - [ ] **Budget management**
   Warn Victor when budget is low. Request increase, prioritize tasks by cost.
@@ -30,11 +16,6 @@
 
 - [ ] **Eliezer's network**
   Opt-in: participate in a tightly curated conversation open to all Eliezer bots.
-
-- [ ] **Search**
-  Memory search, file search, web search.
-  Semantic vs keyword. Embeddings.
-
 
 - [ ] **Audio transcription**
   Transcribe audio attachments via Groq Whisper API (fast, cheap, OpenAI-compatible).
