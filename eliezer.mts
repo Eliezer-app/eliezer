@@ -11,7 +11,7 @@ import { createSearchHistoryTool } from './tool-search-history.mts';
 import { SearXNGProvider } from './search.mts';
 import { CronManager } from './cron.mts';
 import { ChatClient, createChatTool } from './chat.mts';
-import { Compactor, getMemoryStats } from './compaction.mts';
+import { Compactor } from './compaction.mts';
 import { redactSecrets } from './detect-secret.mts';
 
 config();
@@ -70,7 +70,7 @@ function parseDuration(s: string, defaultSec: number): number {
 		default: return n;
 	}
 }
-const compactor = new Compactor(db, compactionLlm, USER_TZ, {
+const compactor = new Compactor(memory, compactionLlm, USER_TZ, {
 	tokenBudget: CONTEXT_WINDOW,
 	groupGapSeconds: parseDuration(process.env.COMPACTION_GROUP_GAP || '1m', 60),
 	flowLimitSeconds: parseDuration(process.env.COMPACTION_FLOW_LIMIT || '1m', 60),
@@ -132,7 +132,7 @@ startServer({
 	getMemory: () => {
 		const system = [readPrompt('system.md'), readPrompt('user.md')].filter(Boolean).join('\n\n');
 		const mem = readPrompt('memory.md');
-		return getMemoryStats(db, `${PROMPTS_DIR}/memory.md`, CONTEXT_WINDOW, system, mem);
+		return memory.getMemoryStats(`${PROMPTS_DIR}/memory.md`, CONTEXT_WINDOW, system, mem);
 	},
 	listCrons: () => cronManager.list(),
 	setCronEnabled: (name, enabled) => cronManager.setEnabled(name, enabled),

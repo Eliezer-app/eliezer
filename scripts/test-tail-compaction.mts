@@ -1,11 +1,12 @@
 import { config } from 'dotenv';
 config();
 import Database from 'better-sqlite3';
-import { readFileSync } from 'fs';
-import { getUncompressedGroups, getCompactedSummaries, summarizeGroup } from '../compaction.mts';
+import { Memory } from '../memory.mts';
+import { compressGroup } from '../compaction.mts';
 import { createLLM } from '../llm.mts';
 
 const db = new Database(process.env.DB_PATH as string);
+const memory = new Memory(db, process.env.USER_TZ as string);
 const llm = createLLM({
 	provider: process.env.COMPACTION_LLM_PROVIDER || process.env.LLM_PROVIDER as string,
 	apiKey: process.env.COMPACTION_LLM_API_KEY || process.env.LLM_API_KEY as string,
@@ -14,19 +15,13 @@ const llm = createLLM({
 	timeoutMs: 120_000,
 });
 
-const groups = getUncompressedGroups(db, 60);
+const groups = memory.getUncompressedGroups(60);
 const group = groups[0];
-
-// Build prior context
-const parts: string[] = [];
-let mem = '';
-try { mem = readFileSync(process.env.PROMPTS_DIR + '/memory.md', 'utf-8').trim(); } catch {}
-if (mem) parts.push('## Memory\n' + mem);
-const summaries = getCompactedSummaries(db);
-if (summaries.length) parts.push('## Compacted history\n' + summaries.map(s => `[${s.role}] ${s.summary}`).join('\n\n'));
-const priorContext = parts.length ? parts.join('\n\n') : undefined;
+const priorContext = memory.buildPriorContext(process.env.PROMPTS_DIR as string);
 
 console.log(`Compressing group 0 (rowids ${group.start}-${group.end}, ${group.messages.length} msgs) with prior context...`);
 console.log(`Prior context: ${priorContext ? Math.round(priorContext.length / 4) + ' tokens' : 'none'}`);
-const summary = await summarizeGroup(group, llm, process.env.PROMPTS_DIR as string, priorContext);
-console.log('\n=== Result ===\n' + summary);
+const result = await compressGroup(memory, group, llm, process.env.PROMPTS_DIR as string, process.env.USER_TZ as string, priorContext);
+console.log(`\n=== Result: ${result.anchors} anchors, ${result.tokensBefore} → ${result.tokensAfter} tokens ===`);
+const summaries = memory.getCompactedSummaries();
+for (const s of summaries) console.log(`[${s.role}] ${s.summary}`);

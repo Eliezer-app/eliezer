@@ -1,9 +1,10 @@
 import { config } from 'dotenv'; config();
 import Database from 'better-sqlite3';
-import { getUncompressedGroups } from '../compaction.mts';
+import { Memory } from '../memory.mts';
 
 const db = new Database(process.env.DB_PATH as string);
-const allGroups = getUncompressedGroups(db, 60);
+const memory = new Memory(db, process.env.USER_TZ as string);
+const allGroups = memory.getUncompressedGroups(60);
 const groups = allGroups.slice(0, -1);
 
 // LLM output timestamps from the structured compaction run

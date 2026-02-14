@@ -1,15 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { Memory } from '../memory.mts';
-import {
-	identifyGroups, estimateTokens, compressGroup, getCompactedSummaries,
-	getUncompressedGroups, getMemoryStats, Group,
-} from '../compaction.mts';
+import { Memory, estimateTokens, Group } from '../memory.mts';
+import { compressGroup } from '../compaction.mts';
 
-function createDb(): Database.Database {
+function createMemory(): { db: Database.Database; memory: Memory } {
 	const db = new Database(':memory:');
-	new Memory(db, 'UTC'); // runs migrations, creates tables
-	return db;
+	const memory = new Memory(db, 'UTC');
+	return { db, memory };
 }
 
 function insertMessage(db: Database.Database, role: string, content: string, createdAt: number, id?: string) {
@@ -33,19 +30,19 @@ const fakeLlm = {
 
 describe('identifyGroups', () => {
 	it('groups messages within time gap', () => {
-		const db = createDb();
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		insertMessage(db, 'user', 'msg1', t);
 		insertMessage(db, 'assistant', 'msg2', t + 5);
 		insertMessage(db, 'user', 'msg3', t + 10);
 
-		const groups = identifyGroups(db, 60);
+		const groups = memory.identifyGroups(60);
 		expect(groups).toHaveLength(1);
 		expect(groups[0].messages).toHaveLength(3);
 	});
 
 	it('splits on time gap', () => {
-		const db = createDb();
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		insertMessage(db, 'user', 'msg1', t);
 		insertMessage(db, 'assistant', 'msg2', t + 5);
@@ -53,34 +50,34 @@ describe('identifyGroups', () => {
 		insertMessage(db, 'user', 'msg3', t + 125);
 		insertMessage(db, 'assistant', 'msg4', t + 130);
 
-		const groups = identifyGroups(db, 60);
+		const groups = memory.identifyGroups(60);
 		expect(groups).toHaveLength(2);
 		expect(groups[0].messages).toHaveLength(2);
 		expect(groups[1].messages).toHaveLength(2);
 	});
 
 	it('returns empty for empty db', () => {
-		const db = createDb();
-		expect(identifyGroups(db, 60)).toHaveLength(0);
+		const { memory } = createMemory();
+		expect(memory.identifyGroups(60)).toHaveLength(0);
 	});
 
 	it('single message is one group', () => {
-		const db = createDb();
+		const { db, memory } = createMemory();
 		insertMessage(db, 'user', 'solo', 1000000);
-		const groups = identifyGroups(db, 60);
+		const groups = memory.identifyGroups(60);
 		expect(groups).toHaveLength(1);
 		expect(groups[0].messages).toHaveLength(1);
 	});
 
 	it('excludes archived messages', () => {
-		const db = createDb();
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		insertMessage(db, 'user', 'msg1', t);
 		insertMessage(db, 'assistant', 'msg2', t + 5);
 		db.prepare('UPDATE messages SET archived = 1').run();
 		insertMessage(db, 'user', 'msg3', t + 200);
 
-		const groups = identifyGroups(db, 60);
+		const groups = memory.identifyGroups(60);
 		expect(groups).toHaveLength(1);
 		expect(groups[0].messages).toHaveLength(1);
 		expect(groups[0].messages[0].content).toBe('msg3');
@@ -97,13 +94,13 @@ describe('estimateTokens', () => {
 
 describe('compressGroup', () => {
 	it('archives source messages and inserts into compacted table', async () => {
-		const db = createDb();
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		insertMessage(db, 'user', 'hello', t, 'msg1');
 		insertMessage(db, 'assistant', 'world', t + 5, 'msg2');
 
-		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
+		const groups = memory.identifyGroups(60);
+		await compressGroup(memory, groups[0], fakeLlm, 'prompts-default','UTC');
 
 		// Source messages should be archived
 		const msgs = db.prepare('SELECT chat_message_id, archived FROM messages ORDER BY rowid').all() as any[];
@@ -116,13 +113,13 @@ describe('compressGroup', () => {
 	});
 
 	it('logs to compaction_log', async () => {
-		const db = createDb();
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		insertMessage(db, 'user', 'hello', t);
 		insertMessage(db, 'assistant', 'world', t + 5);
 
-		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
+		const groups = memory.identifyGroups(60);
+		await compressGroup(memory, groups[0], fakeLlm, 'prompts-default','UTC');
 
 		const log = db.prepare('SELECT * FROM compaction_log').all() as any[];
 		expect(log).toHaveLength(1);
@@ -134,7 +131,7 @@ describe('compressGroup', () => {
 
 describe('getCompactedSummaries', () => {
 	it('returns non-archived summaries from compacted table', async () => {
-		const db = createDb();
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		insertMessage(db, 'user', 'msg1', t);
 		insertMessage(db, 'assistant', 'msg2', t + 5);
@@ -142,46 +139,46 @@ describe('getCompactedSummaries', () => {
 		insertMessage(db, 'user', 'msg3', t + 200);
 		insertMessage(db, 'assistant', 'msg4', t + 205);
 
-		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
+		const groups = memory.identifyGroups(60);
+		await compressGroup(memory, groups[0], fakeLlm, 'prompts-default','UTC');
 		// Second group now becomes the only unarchived group
-		const groups2 = identifyGroups(db, 60);
-		await compressGroup(db, groups2[0], fakeLlm, 'prompts-default','UTC');
+		const groups2 = memory.identifyGroups(60);
+		await compressGroup(memory, groups2[0], fakeLlm, 'prompts-default','UTC');
 
-		const summaries = getCompactedSummaries(db);
+		const summaries = memory.getCompactedSummaries();
 		expect(summaries).toHaveLength(2);
 		expect(summaries[0].summary).toContain('Summary');
 		expect(summaries[0].role).toBeDefined();
 	});
 
 	it('excludes archived summaries', async () => {
-		const db = createDb();
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		insertMessage(db, 'user', 'msg1', t);
 		insertMessage(db, 'assistant', 'msg2', t + 5);
 
-		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
-		expect(getCompactedSummaries(db)).toHaveLength(1);
+		const groups = memory.identifyGroups(60);
+		await compressGroup(memory, groups[0], fakeLlm, 'prompts-default','UTC');
+		expect(memory.getCompactedSummaries()).toHaveLength(1);
 
 		db.prepare('UPDATE compacted SET archived = 1').run();
-		expect(getCompactedSummaries(db)).toHaveLength(0);
+		expect(memory.getCompactedSummaries()).toHaveLength(0);
 	});
 });
 
 describe('getUncompressedGroups', () => {
 	it('excludes already compressed groups', async () => {
-		const db = createDb();
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		insertMessage(db, 'user', 'msg1', t);
 		insertMessage(db, 'assistant', 'msg2', t + 5);
 		// gap
 		insertMessage(db, 'user', 'msg3', t + 200);
 
-		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
+		const groups = memory.identifyGroups(60);
+		await compressGroup(memory, groups[0], fakeLlm, 'prompts-default','UTC');
 
-		const uncompressed = getUncompressedGroups(db, 60);
+		const uncompressed = memory.getUncompressedGroups(60);
 		expect(uncompressed).toHaveLength(1);
 		expect(uncompressed[0].messages[0].content).toBe('msg3');
 	});
@@ -189,44 +186,41 @@ describe('getUncompressedGroups', () => {
 
 describe('getCompactedHistory', () => {
 	it('returns formatted text block for system prompt', async () => {
-		const db = createDb();
-		const mem = new Memory(db, 'UTC');
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		insertMessage(db, 'user', 'hello', t);
 		insertMessage(db, 'assistant', 'world', t + 5);
 		// gap
 		insertMessage(db, 'user', 'second', t + 200);
 
-		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
+		const groups = memory.identifyGroups(60);
+		await compressGroup(memory, groups[0], fakeLlm, 'prompts-default','UTC');
 
-		const history = mem.getCompactedHistory();
+		const history = memory.getCompactedHistory();
 		expect(history).toContain('Agent:');
 		expect(history).toContain('Summary');
 		expect(history).toMatch(/^\[:/); // starts with [:timestamp]
 	});
 
 	it('returns empty string when nothing is compacted', () => {
-		const db = createDb();
-		const mem = new Memory(db, 'UTC');
+		const { db, memory } = createMemory();
 		insertMessage(db, 'user', 'hello', 1000000);
 
-		expect(mem.getCompactedHistory()).toBe('');
+		expect(memory.getCompactedHistory()).toBe('');
 	});
 
 	it('compacted messages excluded from getContext()', async () => {
-		const db = createDb();
-		const mem = new Memory(db, 'UTC');
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		insertMessage(db, 'user', 'old msg', t);
 		insertMessage(db, 'assistant', 'old reply', t + 5);
 		// gap
 		insertMessage(db, 'user', 'recent msg', t + 200);
 
-		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
+		const groups = memory.identifyGroups(60);
+		await compressGroup(memory, groups[0], fakeLlm, 'prompts-default','UTC');
 
-		const context = mem.getContext();
+		const context = memory.getContext();
 		const allText = context.map(m => typeof m.content === 'string' ? m.content : '').join(' ');
 		expect(allText).toContain('recent msg');
 		expect(allText).not.toContain('old msg');
@@ -235,7 +229,7 @@ describe('getCompactedHistory', () => {
 
 describe('getMemoryStats', () => {
 	it('returns correct zone counts', async () => {
-		const db = createDb();
+		const { db, memory } = createMemory();
 		const t = 1000000;
 		// Flow zone: 2 messages
 		insertMessage(db, 'user', 'flow1', t);
@@ -244,10 +238,10 @@ describe('getMemoryStats', () => {
 		insertMessage(db, 'user', 'old1', t + 200);
 		insertMessage(db, 'assistant', 'old2', t + 205);
 
-		const groups = identifyGroups(db, 60);
-		await compressGroup(db, groups[0], fakeLlm, 'prompts-default','UTC');
+		const groups = memory.identifyGroups(60);
+		await compressGroup(memory, groups[0], fakeLlm, 'prompts-default','UTC');
 
-		const stats = getMemoryStats(db, '/nonexistent/memory.md', 80000, 'system prompt text', 'memory text');
+		const stats = memory.getMemoryStats('/nonexistent/memory.md', 80000, 'system prompt text', 'memory text');
 		expect(stats.context.flow.messages).toBe(2);
 		expect(stats.context.compacted.groups).toBeGreaterThanOrEqual(1);
 		expect(stats.archived.messages).toBe(2);

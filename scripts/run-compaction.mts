@@ -2,9 +2,11 @@ import { config } from 'dotenv';
 config();
 import Database from 'better-sqlite3';
 import { createLLM } from '../llm.mts';
-import { Compactor, getCompactedSummaries } from '../compaction.mts';
+import { Memory } from '../memory.mts';
+import { Compactor } from '../compaction.mts';
 
 const db = new Database(process.env.DB_PATH as string);
+const memory = new Memory(db, process.env.USER_TZ as string);
 const llm = createLLM({
 	provider: process.env.COMPACTION_LLM_PROVIDER || process.env.LLM_PROVIDER as string,
 	apiKey: process.env.COMPACTION_LLM_API_KEY || process.env.LLM_API_KEY as string,
@@ -12,7 +14,7 @@ const llm = createLLM({
 	baseUrl: process.env.COMPACTION_LLM_BASE_URL || process.env.LLM_BASE_URL as string,
 	timeoutMs: 240_000,
 });
-const compactor = new Compactor(db, llm, process.env.USER_TZ as string, {
+const compactor = new Compactor(memory, llm, process.env.USER_TZ as string, {
 	tokenBudget: 80_000,
 	groupGapSeconds: 60,
 	flowLimitSeconds: 0,
@@ -23,7 +25,7 @@ console.log('Running compaction...');
 const result = await compactor.compact();
 console.log('Result:', result);
 
-const summaries = getCompactedSummaries(db);
+const summaries = memory.getCompactedSummaries();
 console.log(`\n--- ${summaries.length} compacted summaries ---`);
 summaries.forEach((s, i) => console.log(`\n=== Summary ${i + 1} [${s.role}] ===\n${s.summary}`));
 summaries.slice(0, 3).forEach(s => {
