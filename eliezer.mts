@@ -13,6 +13,7 @@ import { CronManager } from './cron.mts';
 import { ChatClient, createChatTool } from './chat.mts';
 import { Compactor } from './compaction.mts';
 import { redactSecrets } from './detect-secret.mts';
+import { createFileSearchTool } from './tool-file-search.mts';
 
 config();
 
@@ -66,7 +67,7 @@ const compactor = new Compactor(memory, compactionLlm, USER_TZ, {
 	promptsDir: PROMPTS_DIR,
 });
 const searchProvider = new SearXNGProvider(SEARCH_URL);
-const tools = [...createTools(compactionLlm), createChatTool(chat, CHAT_PUBLIC_DIR, db), createSearchHistoryTool(db), createScheduleTool(cronManager), createWebSearchTool(searchProvider, compactionLlm)];
+const tools = [...createTools(compactionLlm), createChatTool(chat, CHAT_PUBLIC_DIR, db), createSearchHistoryTool(db), createScheduleTool(cronManager), createWebSearchTool(searchProvider, compactionLlm), createFileSearchTool()];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
 function readPrompt(name: string): string {
