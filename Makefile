@@ -1,4 +1,4 @@
-.PHONY: dev stop shell logs clean clean-compacted test test-up test-down export export-html api-docs dump-system status prod-start prod-stop prod-deploy prod-git-unlock prod-logs prod-logs-all prod-logs-clear
+.PHONY: dev stop shell logs clean clean-compacted test test-up test-down export export-html api-docs dump-system status prod-start prod-stop prod-deploy deploy-all prod-git-unlock prod-logs prod-logs-all prod-logs-clear
 
 dev: stop test-down
 	@test -d prompts || (mkdir -p prompts && cp -rn prompts-default/* prompts/)
@@ -73,6 +73,9 @@ prod-git-unlock:
 
 prod-deploy:
 	$(MAKE) -C deploy deploy
+
+deploy-all:
+	$(MAKE) -C /opt/clawchat prod-deploy && $(MAKE) prod-deploy
 
 prod-logs:
 	journalctl -u eliezer -f
