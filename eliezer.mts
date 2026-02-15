@@ -77,7 +77,7 @@ const compactor = new Compactor(memory, compactionLlm, USER_TZ, {
 	promptsDir: PROMPTS_DIR,
 });
 const searchProvider = new SearXNGProvider(SEARCH_URL);
-const tools = [...createTools(compactionLlm), createChatTool(chat, CHAT_PUBLIC_DIR), createSearchHistoryTool(db), createScheduleTool(cronManager), createWebSearchTool(searchProvider, compactionLlm)];
+const tools = [...createTools(compactionLlm), createChatTool(chat, CHAT_PUBLIC_DIR, db), createSearchHistoryTool(db), createScheduleTool(cronManager), createWebSearchTool(searchProvider, compactionLlm)];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
 function readPrompt(name: string): string {
@@ -239,7 +239,7 @@ while (true) {
 			queue.done(event.id);
 			writeFileSync(RESTART_FLAG_FILE, '');
 			log.info('restart requested — exiting');
-			break;
+			process.exit(0);
 		}
 	} catch (e: any) {
 		if (e.name === 'AbortError') {
