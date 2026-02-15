@@ -99,18 +99,19 @@ describe('CronManager', () => {
 	});
 
 	describe('checkDue', () => {
-		it('cron with null last_run is due', () => {
+		it('newly created cron is not immediately due', () => {
 			cron.create('test', 'echo hi', '* * * * *'); // every minute
+			const due = cron.checkDue();
+			expect(due).toHaveLength(0);
+		});
+
+		it('cron created in the past is due', () => {
+			cron.create('test', 'echo hi', '* * * * *');
+			// Backdate created_at so a cron tick has passed since creation
+			db.prepare("UPDATE crons SET created_at = datetime('now', '-2 minutes') WHERE name = 'test'").run();
 			const due = cron.checkDue();
 			expect(due).toHaveLength(1);
 			expect(due[0]).toEqual({ name: 'test', prompt: 'echo hi' });
-		});
-
-		it('cron with recent last_run is not due', () => {
-			cron.create('test', 'echo hi', '* * * * *');
-			cron.checkDue(); // marks as run
-			const due = cron.checkDue();
-			expect(due).toHaveLength(0);
 		});
 
 		it('disabled crons are skipped', () => {
@@ -122,6 +123,7 @@ describe('CronManager', () => {
 
 		it('updates last_run after firing', () => {
 			cron.create('test', 'echo hi', '* * * * *');
+			db.prepare("UPDATE crons SET created_at = datetime('now', '-2 minutes') WHERE name = 'test'").run();
 			cron.checkDue();
 			const rows = cron.list();
 			expect(rows[0].last_run).not.toBeNull();

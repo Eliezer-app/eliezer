@@ -6,7 +6,7 @@ import { createLLM, ContentBlock } from './llm.mts';
 import { EventQueue, AgentEvent } from './queue.mts';
 import { Memory } from './memory.mts';
 import { startServer } from './server.mts';
-import { createTools, createScheduleTool, createWebSearchTool } from './tools.mts';
+import { createTools, createScheduleTool, createWebSearchTool, parseDuration } from './tools.mts';
 import { createSearchHistoryTool } from './tool-search-history.mts';
 import { SearXNGProvider } from './search.mts';
 import { CronManager } from './cron.mts';
@@ -59,17 +59,6 @@ const cronManager = new CronManager(db);
 
 const CONTEXT_WINDOW = Number(requireEnv('CONTEXT_WINDOW'));
 
-// Compaction config
-function parseDuration(s: string, defaultSec: number): number {
-	const m = s.match(/^(\d+)(s|m|h)?$/);
-	if (!m) return defaultSec;
-	const n = parseInt(m[1]);
-	switch (m[2]) {
-		case 'h': return n * 3600;
-		case 'm': return n * 60;
-		default: return n;
-	}
-}
 const compactor = new Compactor(memory, compactionLlm, USER_TZ, {
 	tokenBudget: CONTEXT_WINDOW,
 	groupGapSeconds: parseDuration(process.env.COMPACTION_GROUP_GAP || '1m', 60),

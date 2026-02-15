@@ -265,16 +265,39 @@ export function createTools(vettingLlm?: LLMBase): Tool[] {
 	];
 }
 
+const UNIT_SECONDS: Record<string, number> = { d: 86400, h: 3600, m: 60, s: 1 };
+
+export function parseDuration(s: string, defaultSec: number): number;
+export function parseDuration(s: string): number | null;
+export function parseDuration(s: string, defaultSec?: number): number | null {
+	// Compound: "1h30m", "1m:30s", "2h:15m:30s"
+	const parts = s.replace(/:/g, '').match(/\d+\s*[smhd]/g);
+	if (parts) {
+		let total = 0;
+		for (const p of parts) {
+			const m = p.match(/^(\d+)\s*([smhd])$/);
+			if (!m) return defaultSec ?? null;
+			total += parseInt(m[1]) * UNIT_SECONDS[m[2]];
+		}
+		return total || (defaultSec ?? null);
+	}
+	// Bare number (seconds)
+	const bare = s.match(/^(\d+)$/);
+	if (bare) return parseInt(bare[1]) || (defaultSec ?? null);
+	return defaultSec ?? null;
+}
+
 export function createScheduleTool(cronManager: CronManager): Tool {
 	return {
 		name: 'schedule',
-		description: 'Schedule recurring prompts via cron. No action field = create or update (prompt and cron required; same name overwrites). Actions: pause, resume, delete.',
+		description: 'Schedule prompts. Provide cron for recurring or delay for one-shot (e.g. "10m", "2h"). No action field = create/update (prompt required + cron or delay; same name overwrites). Actions: pause, resume, delete. One-shots auto-delete after firing.',
 		input_schema: {
 			type: 'object',
 			properties: {
-				name: { type: 'string', description: 'Unique name for the cron job' },
-				prompt: { type: 'string', description: 'Prompt sent to you when the cron fires (required for create)' },
-				cron: { type: 'string', description: 'Cron expression, e.g. "*/5 * * * *" (required for create)' },
+				name: { type: 'string', description: 'Unique name for the schedule' },
+				prompt: { type: 'string', description: 'Prompt sent to you when it fires (required for create)' },
+				cron: { type: 'string', description: 'Cron expression for recurring, e.g. "*/5 * * * *"' },
+				delay: { type: 'string', description: 'One-shot delay, e.g. "10m", "2h", "1d"' },
 				action: { type: 'string', enum: ['pause', 'resume', 'delete'], description: 'Control action (omit to create)' },
 			},
 			required: ['name'],
@@ -282,9 +305,15 @@ export function createScheduleTool(cronManager: CronManager): Tool {
 		async call(input): Promise<ToolResult> {
 			try {
 				if (!input.action) {
-					if (!input.prompt || !input.cron) {
-						return { content: 'Error: prompt and cron are required to create a schedule', isError: true };
+					if (!input.prompt) return { content: 'Error: prompt is required to create a schedule', isError: true };
+					if (input.delay) {
+						if (!/[smhd]/.test(input.delay)) return { content: `Invalid delay format: "${input.delay}". Must include a unit (s, m, h, d). E.g. "10m", "2h", "1h30m"`, isError: true };
+						const sec = parseDuration(input.delay);
+						if (!sec) return { content: `Invalid delay format: "${input.delay}". Use e.g. "10m", "2h", "1d", "1h30m"`, isError: true };
+						cronManager.createOneShot(input.name, input.prompt, sec);
+						return { content: `Scheduled "${input.name}" to run in ${input.delay}`, isError: false };
 					}
+					if (!input.cron) return { content: 'Error: cron or delay is required to create a schedule', isError: true };
 					cronManager.create(input.name, input.prompt, input.cron);
 					return { content: `Scheduled "${input.name}" with cron ${input.cron}`, isError: false };
 				}
@@ -295,7 +324,7 @@ export function createScheduleTool(cronManager: CronManager): Tool {
 					case 'delete': ok = cronManager.delete(input.name); break;
 					default: return { content: `Unknown action: ${input.action}`, isError: true };
 				}
-				if (!ok) return { content: `Cron "${input.name}" not found`, isError: true };
+				if (!ok) return { content: `Schedule "${input.name}" not found`, isError: true };
 				return { content: `${input.action}d "${input.name}"`, isError: false };
 			} catch (e: any) {
 				return { content: e.message, isError: true };
