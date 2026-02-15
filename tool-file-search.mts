@@ -1,7 +1,7 @@
 import { exec } from 'child_process';
 import { readdirSync, statSync } from 'fs';
 import { join } from 'path';
-import { Tool, ToolResult } from './tools.mts';
+import { ToolBase, ToolResult } from './tools.mts';
 
 const ALLOWED_COMMANDS = new Set(['ls', 'grep', 'find', 'df', 'wc', 'tree']);
 const TIMEOUT_MS = 5_000;
@@ -74,45 +74,50 @@ function truncate(output: string): string {
 	return `${output.slice(0, half)}\n\n... (${cut} chars truncated) ...\n\n${output.slice(-half)}`;
 }
 
-export function createFileSearchTool(): Tool {
-	return {
-		name: 'file_search',
-		description: 'Search files. command: ls, grep, find, df, wc, tree. path = working directory for all commands. tree shows project structure (auto-excludes: node_modules, .git, .pnpm-store, dist, build, coverage, .cache, __pycache__, .venv; args = additional dirs to exclude). Others take standard args. 5s timeout, output capped.',
-		input_schema: {
-			type: 'object',
-			properties: {
-				command: { type: 'string', enum: ['ls', 'grep', 'find', 'df', 'wc', 'tree'], description: 'Command to run' },
-				args: { type: 'array', items: { type: 'string' }, description: 'Command arguments (for tree: extra dirs to exclude)' },
-				path: { type: 'string', description: 'Working directory (default: cwd)' },
-			},
-			required: ['command'],
+export class FileSearchTool extends ToolBase {
+	name = 'file_search';
+	description = 'Search files. command: ls, grep, find, df, wc, tree. path = working directory for all commands. tree shows project structure (auto-excludes: node_modules, .git, .pnpm-store, dist, build, coverage, .cache, __pycache__, .venv; args = additional dirs to exclude). Others take standard args. 5s timeout, output capped.';
+	input_schema = {
+		type: 'object',
+		properties: {
+			command: { type: 'string', enum: ['ls', 'grep', 'find', 'df', 'wc', 'tree'], description: 'Command to run' },
+			args: { type: 'array', items: { type: 'string' }, description: 'Command arguments (for tree: extra dirs to exclude)' },
+			path: { type: 'string', description: 'Working directory (default: cwd)' },
 		},
-		async call({ command, args, path }, signal): Promise<ToolResult> {
-			if (!ALLOWED_COMMANDS.has(command)) {
-				return { content: `Unknown command: ${command}. Allowed: ${[...ALLOWED_COMMANDS].join(', ')}`, isError: true };
-			}
-
-			if (command === 'tree') {
-				const root = path || process.cwd();
-				try {
-					return { content: buildTree(root, args), isError: false };
-				} catch (e: any) {
-					return { content: e.message, isError: true };
-				}
-			}
-
-			const shellArgs = (args || []).map((a: string) => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
-			const cmd = `${command} ${shellArgs}`;
-
-			return new Promise(resolve => {
-				const cwd = path || process.cwd();
-			const child = exec(cmd, { encoding: 'utf-8', timeout: TIMEOUT_MS, cwd }, (err, stdout, stderr) => {
-					if (signal?.aborted) resolve({ content: 'aborted', isError: true });
-					else if (err && !stdout) resolve({ content: truncate(err.message), isError: true });
-					else resolve({ content: truncate(stdout || stderr), isError: false });
-				});
-				signal?.addEventListener('abort', () => child.kill(), { once: true });
-			});
-		},
+		required: ['command'],
 	};
+
+	async call({ command, args, path }: Record<string, any>, signal?: AbortSignal): Promise<ToolResult> {
+		if (!ALLOWED_COMMANDS.has(command)) {
+			return { content: `Unknown command: ${command}. Allowed: ${[...ALLOWED_COMMANDS].join(', ')}`, isError: true };
+		}
+
+		if (command === 'tree') {
+			const root = path || process.cwd();
+			try {
+				return { content: buildTree(root, args), isError: false };
+			} catch (e: any) {
+				return { content: e.message, isError: true };
+			}
+		}
+
+		const cwd = path || process.cwd();
+		try {
+			if (!statSync(cwd).isDirectory()) return { content: `Not a directory: ${cwd}`, isError: true };
+		} catch (e: any) {
+			return { content: `Invalid path: ${cwd}: ${e.message}`, isError: true };
+		}
+
+		const shellArgs = (args || []).map((a: string) => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
+		const cmd = `${command} ${shellArgs}`;
+
+		return new Promise(resolve => {
+			const child = exec(cmd, { encoding: 'utf-8', timeout: TIMEOUT_MS, cwd }, (err, stdout, stderr) => {
+				if (signal?.aborted) resolve({ content: 'aborted', isError: true });
+				else if (err && !stdout) resolve({ content: truncate(err.message), isError: true });
+				else resolve({ content: truncate(stdout || stderr), isError: false });
+			});
+			signal?.addEventListener('abort', () => child.kill(), { once: true });
+		});
+	}
 }

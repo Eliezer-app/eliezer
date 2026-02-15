@@ -6,14 +6,15 @@ import { createLLM, ContentBlock } from './llm.mts';
 import { EventQueue, AgentEvent } from './queue.mts';
 import { Memory } from './memory.mts';
 import { startServer } from './server.mts';
-import { createTools, createScheduleTool, createWebSearchTool, parseDuration } from './tools.mts';
-import { createSearchHistoryTool } from './tool-search-history.mts';
+import { ExecTool, ReadTool, WriteTool, EditTool, WgetTool, RestartTool, ScheduleTool, WebSearchTool, parseDuration } from './tools.mts';
+import { SearchHistoryTool } from './tool-search-history.mts';
 import { SearXNGProvider } from './search.mts';
 import { CronManager } from './cron.mts';
-import { ChatClient, createChatTool } from './chat.mts';
+import { ChatClient, ChatTool } from './chat.mts';
 import { Compactor } from './compaction.mts';
 import { redactSecrets } from './detect-secret.mts';
-import { createFileSearchTool } from './tool-file-search.mts';
+import { FileSearchTool } from './tool-file-search.mts';
+import { CodebaseExplorerTool } from './tool-explore.mts';
 
 config();
 
@@ -67,7 +68,13 @@ const compactor = new Compactor(memory, compactionLlm, USER_TZ, {
 	promptsDir: PROMPTS_DIR,
 });
 const searchProvider = new SearXNGProvider(SEARCH_URL);
-const tools = [...createTools(compactionLlm), createChatTool(chat, CHAT_PUBLIC_DIR, db), createSearchHistoryTool(db), createScheduleTool(cronManager), createWebSearchTool(searchProvider, compactionLlm), createFileSearchTool()];
+const tools = [
+	new ExecTool(), new ReadTool(), new WriteTool(), new EditTool(),
+	new WgetTool(compactionLlm), new RestartTool(),
+	new ChatTool(chat, CHAT_PUBLIC_DIR, db), new SearchHistoryTool(db),
+	new ScheduleTool(cronManager), new WebSearchTool(searchProvider, compactionLlm),
+	new FileSearchTool(), new CodebaseExplorerTool(llm),
+];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
 function readPrompt(name: string): string {

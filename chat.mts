@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import { resolve, normalize } from 'path';
 import Database from 'better-sqlite3';
-import { Tool, ToolResult } from './tools.mts';
+import { ToolBase, ToolResult } from './tools.mts';
 
 export class ChatClient {
 	private baseUrl: string;
@@ -46,54 +46,65 @@ function findMessageByMatch(db: Database.Database, match: string): { id: string 
 	return { id: rows[0].chat_message_id };
 }
 
-export function createChatTool(client: ChatClient, chatPublicDir: string, db: Database.Database): Tool {
-	return {
-		name: 'chat',
-		description: `Manage chat messages. Actions: update (edit a sent message), delete (remove a message), send (send a message). Avoid using send unless you are sending an attachment — your plain text responses are automatically delivered to chat. To attach a file, write it to ${chatPublicDir}/ and include attachment.filename. For update/delete, provide a "match" string (substring of the message). If multiple messages match, the call is rejected — use a more specific match.`,
-		input_schema: {
-			type: 'object',
-			properties: {
-				action: { type: 'string', enum: ['send', 'update', 'delete'] },
-				conversationId: { type: 'string', description: 'Required for send' },
-				match: { type: 'string', description: 'Substring to find the message. Required for update/delete' },
-				content: { type: 'string', description: 'Required for send/update' },
-				attachment: { type: 'object', properties: { filename: { type: 'string', description: 'Filename (not path) of a file already written to the chat-public directory' } }, required: ['filename'] },
-			},
-			required: ['action'],
+export class ChatTool extends ToolBase {
+	name = 'chat';
+	description: string;
+	input_schema = {
+		type: 'object',
+		properties: {
+			action: { type: 'string', enum: ['send', 'update', 'delete'] },
+			conversationId: { type: 'string', description: 'Required for send' },
+			match: { type: 'string', description: 'Substring to find the message. Required for update/delete' },
+			content: { type: 'string', description: 'Required for send/update' },
+			attachment: { type: 'object', properties: { filename: { type: 'string', description: 'Filename (not path) of a file already written to the chat-public directory' } }, required: ['filename'] },
 		},
-		async call(input): Promise<ToolResult> {
-			try {
-				let result: any;
-				switch (input.action) {
-					case 'send':
-						if (input.attachment) {
-							const full = resolve(chatPublicDir, input.attachment.filename);
-							if (!normalize(full).startsWith(resolve(chatPublicDir) + '/'))
-								return { content: 'attachment filename must not escape chat-public directory', isError: true };
-							if (!existsSync(full))
-								return { content: `attachment not found: ${input.attachment.filename}`, isError: true };
-						}
-						result = await client.send(input.conversationId ?? 'default', input.content, undefined, input.attachment);
-						break;
-					case 'update': {
-						const found = findMessageByMatch(db, input.match);
-						if ('error' in found) return { content: found.error, isError: true };
-						result = await client.updateMessage(found.id, input.content);
-						break;
-					}
-					case 'delete': {
-						const found = findMessageByMatch(db, input.match);
-						if ('error' in found) return { content: found.error, isError: true };
-						result = await client.deleteMessage(found.id);
-						break;
-					}
-					default:
-						return { content: `Unknown action: ${input.action}`, isError: true };
-				}
-				return { content: JSON.stringify(result), isError: false, skipSecretRedaction: true };
-			} catch (e: any) {
-				return { content: e.message, isError: true };
-			}
-		},
+		required: ['action'],
 	};
+
+	private client: ChatClient;
+	private chatPublicDir: string;
+	private db: Database.Database;
+
+	constructor(client: ChatClient, chatPublicDir: string, db: Database.Database) {
+		super();
+		this.client = client;
+		this.chatPublicDir = chatPublicDir;
+		this.db = db;
+		this.description = `Manage chat messages. Actions: update (edit a sent message), delete (remove a message), send (send a message). Avoid using send unless you are sending an attachment — your plain text responses are automatically delivered to chat. To attach a file, write it to ${chatPublicDir}/ and include attachment.filename. For update/delete, provide a "match" string (substring of the message). If multiple messages match, the call is rejected — use a more specific match.`;
+	}
+
+	async call(input: Record<string, any>): Promise<ToolResult> {
+		try {
+			let result: any;
+			switch (input.action) {
+				case 'send':
+					if (input.attachment) {
+						const full = resolve(this.chatPublicDir, input.attachment.filename);
+						if (!normalize(full).startsWith(resolve(this.chatPublicDir) + '/'))
+							return { content: 'attachment filename must not escape chat-public directory', isError: true };
+						if (!existsSync(full))
+							return { content: `attachment not found: ${input.attachment.filename}`, isError: true };
+					}
+					result = await this.client.send(input.conversationId ?? 'default', input.content, undefined, input.attachment);
+					break;
+				case 'update': {
+					const found = findMessageByMatch(this.db, input.match);
+					if ('error' in found) return { content: found.error, isError: true };
+					result = await this.client.updateMessage(found.id, input.content);
+					break;
+				}
+				case 'delete': {
+					const found = findMessageByMatch(this.db, input.match);
+					if ('error' in found) return { content: found.error, isError: true };
+					result = await this.client.deleteMessage(found.id);
+					break;
+				}
+				default:
+					return { content: `Unknown action: ${input.action}`, isError: true };
+			}
+			return { content: JSON.stringify(result), isError: false, skipSecretRedaction: true };
+		} catch (e: any) {
+			return { content: e.message, isError: true };
+		}
+	}
 }

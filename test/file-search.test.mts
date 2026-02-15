@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
-import { createFileSearchTool } from '../tool-file-search.mts';
+import { FileSearchTool } from '../tool-file-search.mts';
 
-const tool = createFileSearchTool();
+const tool = new FileSearchTool();
 const tmp = join(import.meta.dirname, '.tmp-file-search');
 
 beforeAll(() => {

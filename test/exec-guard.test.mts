@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { createTools } from '../tools.mts';
+import { ExecTool } from '../tools.mts';
 
-const tools = createTools();
-const exec = tools.find(t => t.name === 'exec')!;
+const exec = new ExecTool();
 
 describe('exec guards', () => {
 	it('blocks pipe to bash', async () => {

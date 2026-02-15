@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { Tool, ToolResult } from './tools.mts';
+import { ToolBase, ToolResult } from './tools.mts';
 
 interface SearchOptions {
 	parts: string[];
@@ -141,31 +141,33 @@ function formatResults(results: SearchResult[]): string {
 	return lines.join('\n');
 }
 
-export function createSearchHistoryTool(db: Database.Database): Tool {
-	return {
-		name: 'search_message_history',
-		description: `Search past conversation history. All parts must match (AND). Searches raw messages and compacted summaries.
+export class SearchHistoryTool extends ToolBase {
+	name = 'search_message_history';
+	description = `Search past conversation history. All parts must match (AND). Searches raw messages and compacted summaries.
 
-Optional: context (N messages before/after), since/until (unix timestamps), role filter.`,
-		input_schema: {
-			type: 'object',
-			properties: {
-				parts: { type: 'array', items: { type: 'string' }, description: 'Search terms — all must match (AND)' },
-				limit: { type: 'number', description: 'Max results (default: 10)' },
-				context: { type: 'number', description: 'Include N messages before/after each match (default: 0)' },
-				since: { type: 'number', description: 'Unix timestamp — only messages after this time' },
-				until: { type: 'number', description: 'Unix timestamp — only messages before this time' },
-				role: { type: 'string', enum: ['user', 'assistant'], description: 'Filter by message role' },
-			},
-			required: ['parts'],
+Optional: context (N messages before/after), since/until (unix timestamps), role filter.`;
+	input_schema = {
+		type: 'object',
+		properties: {
+			parts: { type: 'array', items: { type: 'string' }, description: 'Search terms — all must match (AND)' },
+			limit: { type: 'number', description: 'Max results (default: 10)' },
+			context: { type: 'number', description: 'Include N messages before/after each match (default: 0)' },
+			since: { type: 'number', description: 'Unix timestamp — only messages after this time' },
+			until: { type: 'number', description: 'Unix timestamp — only messages before this time' },
+			role: { type: 'string', enum: ['user', 'assistant'], description: 'Filter by message role' },
 		},
-		async call(input: Record<string, any>): Promise<ToolResult> {
-			try {
-				const results = searchMemory(db, input as SearchOptions);
-				return { content: formatResults(results), isError: false };
-			} catch (e: any) {
-				return { content: `Search error: ${e.message}`, isError: true };
-			}
-		},
+		required: ['parts'],
 	};
+
+	private db: Database.Database;
+	constructor(db: Database.Database) { super(); this.db = db; }
+
+	async call(input: Record<string, any>): Promise<ToolResult> {
+		try {
+			const results = searchMemory(this.db, input as SearchOptions);
+			return { content: formatResults(results), isError: false };
+		} catch (e: any) {
+			return { content: `Search error: ${e.message}`, isError: true };
+		}
+	}
 }
