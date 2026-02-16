@@ -145,3 +145,17 @@ Playwright is already in package.json (added by agent).
 - Form filling / interaction
 - Cookie persistence across calls
 - JavaScript execution (beyond page load)
+
+## TODO
+
+- [ ] Create `read-page.mts` with `ReadPageTool` class
+- [ ] Shared browser instance lifecycle (`getBrowser()`)
+- [ ] Text extraction via `page.innerText('body')`
+- [ ] Truncation (100k chars cap)
+- [ ] Vet through `vetContent()`
+- [ ] Fence output with nonce delimiters
+- [ ] Wire into `eliezer.mts` tools array
+- [ ] Update `docker-compose.yml` init to install Chromium
+- [ ] Timeout + error handling (30s, navigation failures, crashes)
+- [ ] Abort download requests interceptor
+- [ ] Tests: `test/read-page.test.mts`

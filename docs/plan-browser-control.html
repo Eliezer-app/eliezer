@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser Control: Architecture Plan</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #fafafa;
+            color: #333;
+            padding: 24px;
+            line-height: 1.6;
+            min-height: 0;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 28px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        h1 {
+            font-size: 26px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 8px;
+            letter-spacing: -0.5px;
+        }
+        .subtitle {
+            font-size: 14px;
+            color: #666;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            background: #e3f2fd;
+            color: #1976d2;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-top: 10px;
+        }
+        
+        .toc {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 18px;
+            margin-bottom: 24px;
+        }
+        .toc h3 {
+            font-size: 13px;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+        .toc ul {
+            list-style: none;
+        }
+        .toc li {
+            padding: 4px 0;
+            font-size: 13px;
+        }
+        .toc a {
+            color: #1976d2;
+            text-decoration: none;
+        }
+        .toc a:hover {
+            text-decoration: underline;
+        }
+        
+        .section {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .section h2 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 14px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .section h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin: 18px 0 10px;
+        }
+        .section p {
+            font-size: 13px;
+            color: #555;
+            margin-bottom: 10px;
+        }
+        
+        .highlight-box {
+            background: #fff8e1;
+            border-left: 4px solid #ffc107;
+            padding: 14px;
+            margin: 14px 0;
+            border-radius: 0 6px 6px 0;
+        }
+        .highlight-box p {
+            margin: 0;
+            font-size: 13px;
+        }
+        
+        .ref-box {
+            background: #e8f5e9;
+            border: 1px solid #c8e6c9;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 12px 0;
+        }
+        .ref-box h4 {
+            font-size: 12px;
+            color: #2e7d32;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .ref-box p {
+            font-size: 12px;
+            color: #388e3c;
+            margin: 0;
+        }
+        
+        .code-block {
+            background: #263238;
+            color: #aed581;
+            padding: 14px;
+            border-radius: 6px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            margin: 12px 0;
+        }
+        
+        .diagram {
+            background: #f5f5f5;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 16px;
+            font-family: monospace;
+            font-size: 12px;
+            line-height: 1.8;
+            margin: 14px 0;
+        }
+        
+        .phase {
+            display: flex;
+            gap: 14px;
+            margin: 14px 0;
+            padding: 14px;
+            background: #f9f9f9;
+            border-radius: 6px;
+        }
+        .phase .num {
+            width: 28px;
+            height: 28px;
+            background: #1976d2;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 13px;
+            flex-shrink: 0;
+        }
+        .phase .content h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 4px;
+        }
+        .phase .content p {
+            font-size: 12px;
+            color: #666;
+            margin: 0;
+        }
+        
+        .endpoint {
+            background: #f5f5f5;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 10px 0;
+        }
+        .endpoint .method {
+            display: inline-block;
+            padding: 2px 8px;
+            background: #1976d2;
+            color: white;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-right: 8px;
+        }
+        .endpoint .method.get { background: #4caf50; }
+        .endpoint .method.post { background: #ff9800; }
+        .endpoint .path {
+            font-family: monospace;
+            font-size: 13px;
+            color: #333;
+        }
+        .endpoint .desc {
+            font-size: 12px;
+            color: #666;
+            margin-top: 6px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 14px 0;
+            font-size: 12px;
+        }
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        th {
+            background: #f5f5f5;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 20px;
+            margin-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            font-size: 12px;
+            color: #999;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+    </script>
+</head>
+<body>
+    <div class="header">
+        <h1>🌐 Browser Control Architecture</h1>
+        <div class="subtitle">Remote Browser Automation for Eliezer</div>
+        <div class="status-badge">Design Phase</div>
+    </div>
+    
+    <div class="toc">
+        <h3>Table of Contents</h3>
+        <ul>
+            <li><a href="#overview">1. Overview & Goals</a></li>
+            <li><a href="#inspiration">2. Inspiration from Existing Projects</a></li>
+            <li><a href="#architecture">3. System Architecture</a></li>
+            <li><a href="#protocol">4. Communication Protocol</a></li>
+            <li><a href="#security">5. Security Model</a></li>
+            <li><a href="#commands">6. Command Reference</a></li>
+            <li><a href="#phases">7. Implementation Phases</a></li>
+            <li><a href="#endpoints">8. API Endpoints</a></li>
+            <li><a href="#auth">9. Authentication Flow</a></li>
+        </ul>
+    </div>
+    
+    <div class="section" id="overview">
+        <h2>1. Overview & Goals</h2>
+        
+        <h3>Problem Statement</h3>
+        <p>Playwright provides headless browser automation but cannot access personal browser sessions (cookies, logins). We need a solution that lets Eliezer control the user's actual Chrome/Firefox browser remotely.</p>
+        
+        <h3>Solution</h3>
+        <p>A Chrome/Firefox extension that connects to the Clawchat server via SSE + REST (the proven pattern used by the web app). This gives Eliezer full control of the user's browser with their explicit permission.</p>
+        
+        <div class="highlight-box">
+            <p><strong>Key Principle:</strong> Reuse existing infrastructure. The web app already proves SSE + REST works bidirectionally without WebSockets. No new protocols needed.</p>
+        </div>
+        
+        <h3>Capabilities</h3>
+        <table>
+            <tr>
+                <th>Feature</th>
+                <th>Playwright</th>
+                <th>Browser Control</th>
+            </tr>
+            <tr>
+                <td>Public sites</td>
+                <td>✅ Yes</td>
+                <td>✅ Yes</td>
+            </tr>
+            <tr>
+                <td>Personal sessions</td>
+                <td>❌ No</td>
+                <td>✅ Yes (your cookies)</td>
+            </tr>
+            <tr>
+                <td>Screenshots</td>
+                <td>✅ Yes</td>
+                <td>✅ Yes</td>
+            </tr>
+            <tr>
+                <td>Form filling</td>
+                <td>✅ Yes</td>
+                <td>✅ Yes</td>
+            </tr>
+            <tr>
+                <td>JavaScript execution</td>
+                <td>✅ Yes</td>
+                <td>✅ Yes</td>
+            </tr>
+            <tr>
+                <td>Multi-tab control</td>
+                <td>✅ Yes</td>
+                <td>✅ Yes</td>
+            </tr>
+        </table>
+    </div>
+    
+    <div class="section" id="inspiration">
+        <h2>2. Inspiration from Existing Projects</h2>
+        
+        <div class="ref-box">
+            <h4>📁 Reference: /opt/eliezer/.work/mcp-chrome</h4>
+            <p><strong>Chrome MCP Server</strong> by hangwin — Full-featured MCP-based browser control</p>
+        </div>
+        
+        <h3>What We Learn</h3>
+        <p><strong>Architecture:</strong> Extension + Native Host Bridge + MCP Protocol. The extension injects content scripts, communicates with background service worker, which talks to local HTTP server via native messaging.</p>
+        
+        <p><strong>Tool Design:</strong> 20+ tools organized by category:</p>
+        <ul style="margin: 10px 0 10px 20px; font-size: 13px; color: #555;">
+            <li>Browser Management (navigate, screenshot, tabs)</li>
+            <li>Element Interaction (click, fill, extract)</li>
+            <li>Network Capture (request monitoring)</li>
+            <li>JavaScript Execution</li>
+        </ul>
+        
+        <p><strong>UI Pattern:</strong> Floating panel injected via Shadow DOM to avoid CSS conflicts.</p>
+        
+        <div class="ref-box">
+            <h4>📁 Reference: /opt/eliezer/.work/A5-Browser-Use</h4>
+            <p><strong>A5 Browser Use</strong> — Simpler extension with Python backend</p>
+        </div>
+        
+        <h3>What We Learn</h3>
+        <p><strong>Simplicity:</strong> Content script directly calls HTTP endpoint. No native host bridge needed.</p>
+        
+        <p><strong>UI Pattern:</strong> Draggable toggle tab on left side of screen. Click to expand command panel.</p>
+        
+        <div class="code-block">
+// A5 pattern: Direct HTTP POST from content script
+const response = await fetch("http://127.0.0.1:8888/run", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ task: userTask })
+});
+        </div>
+        
+        <h3>Key Differences</h3>
+        <table>
+            <tr>
+                <th>Aspect</th>
+                <th>Chrome MCP Server</th>
+                <th>A5 Browser Use</th>
+                <th>Our Solution</th>
+            </tr>
+            <tr>
+                <td>Protocol</td>
+                <td>MCP over native host</td>
+                <td>HTTP REST</td>
+                <td>SSE + REST (reuse clawchat)</td>
+            </tr>
+            <tr>
+                <td>Backend</td>
+                <td>Local Python</td>
+                <td>Local Python</td>
+                <td>Clawchat server (remote)</td>
+            </tr>
+            <tr>
+                <td>Auth</td>
+                <td>None (local only)</td>
+                <td>None (local only)</td>
+                <td>Token-based</td>
+            </tr>
+            <tr>
+                <td>Connection</td>
+                <td>Extension → Local</td>
+                <td>Extension → Local</td>
+                <td>Extension → Remote</td>
+            </tr>
+        </table>
+    </div>
+    
+    <div class="section" id="architecture">
+        <h2>3. System Architecture</h2>
+        
+        <div class="mermaid">
+sequenceDiagram
+    participant E as Eliezer
+    participant S as Clawchat Server
+    participant X as Chrome Extension
+    participant B as Browser
+
+    Note over E: Wants to navigate<br/>to linkedin.com
+    E->>S: POST /send-command<br/>{action: "navigate"}
+    S-->>X: SSE: push command
+    X->>B: window.location.href = ...
+    B-->>X: Page loaded
+    X->>S: POST /response<br/>{status: "success"}
+    S-->>E: Command complete
+        </div>
+        
+        <h3>Components</h3>
+        
+        <div class="phase">
+            <div class="num">1</div>
+            <div class="content">
+                <h4>Chrome Extension</h4>
+                <p>Runs in user's browser. Injects UI panel, executes commands, communicates with server.</p>
+            </div>
+        </div>
+        
+        <div class="phase">
+            <div class="num">2</div>
+            <div class="content">
+                <h4>Clawchat Server</h4>
+                <p>Existing infrastructure. New endpoints for browser control. Reuses auth system.</p>
+            </div>
+        </div>
+        
+        <div class="phase">
+            <div class="num">3</div>
+            <div class="content">
+                <h4>Eliezer Integration</h4>
+                <p>New tool: `browser_control`. Sends commands via chat API, receives results.</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="section" id="protocol">
+        <h2>4. Communication Protocol</h2>
+        
+        <h3>Direction 1: Server → Extension (Commands)</h3>
+        <p>Extension opens SSE connection to receive commands from Eliezer.</p>
+        
+        <div class="endpoint">
+            <span class="method get">GET</span>
+            <span class="path">/api/browser/events</span>
+            <div class="desc">SSE stream for receiving commands. Extension connects and maintains persistent connection.</div>
+        </div>
+        
+        <div class="code-block">
+// Server sends command via SSE
+event: command
+data: {
+  "id": "cmd-uuid-123",
+  "action": "navigate",
+  "params": {
+    "url": "https://linkedin.com"
+  },
+  "timestamp": 1708000000000
+}
+        </div>
+        
+        <h3>Direction 2: Extension → Server (Results)</h3>
+        <p>Extension POSTs results after executing commands.</p>
+        
+        <div class="endpoint">
+            <span class="method post">POST</span>
+            <span class="path">/api/browser/response</span>
+            <div class="desc">Submit command result after execution</div>
+        </div>
+        
+        <div class="code-block">
+// Extension POSTs result
+{
+  "commandId": "cmd-uuid-123",
+  "status": "success",
+  "result": {
+    "title": "LinkedIn",
+    "url": "https://www.linkedin.com/feed",
+    "loadTime": 1200
+  },
+  "timestamp": 1708000005000
+}
+        </div>
+        
+        <h3>Direction 3: Extension → Server (State)</h3>
+        <p>Extension periodically reports current page state.</p>
+        
+        <div class="endpoint">
+            <span class="method post">POST</span>
+            <span class="path">/api/browser/state</span>
+            <div class="desc">Periodic heartbeat with current browser state</div>
+        </div>
+        
+        <div class="code-block">
+// Heartbeat every 5 seconds
+{
+  "sessionId": "ext-session-456",
+  "connected": true,
+  "currentUrl": "https://example.com",
+  "pageTitle": "Example Domain",
+  "ready": true,
+  "timestamp": 1708000010000
+}
+        </div>
+
+        <h3>Direction 4: Server → Eliezer (Response Delivery)</h3>
+        <p>Clawchat receives the extension's response POST and pushes a <code>browser:response</code> event to Eliezer's event queue (<code>POST /events</code>). The tool resolves its promise when the matching event arrives. 30s timeout.</p>
+
+        <div class="mermaid">
+sequenceDiagram
+    participant E as Eliezer (tool)
+    participant S as Clawchat Server
+    participant X as Chrome Extension
+
+    E->>S: POST /api/browser/send-command<br/>{id: "cmd-123", action: "navigate"}
+    Note over E: tool awaits promise<br/>with timeout (30s)
+    S-->>X: SSE: command {id: "cmd-123"}
+    X->>X: Execute command
+    X->>S: POST /api/browser/response<br/>{commandId: "cmd-123", result: {...}}
+    S->>E: POST /events<br/>{type: "browser:response",<br/>payload: {commandId: "cmd-123", ...}}
+    Note over E: promise resolves,<br/>tool returns result
+        </div>
+
+        <div class="code-block">
+// browser_control tool (eliezer side)
+async call({ action, params }) {
+  const commandId = crypto.randomUUID();
+  const promise = this.waitForEvent('browser:response', commandId, 30_000);
+  await chatClient.sendBrowserCommand({ id: commandId, action, params });
+  const result = await promise;
+  return result;
+}
+        </div>
+    </div>
+
+    <div class="section" id="security">
+        <h2>5. Security Model</h2>
+        
+        <div class="highlight-box">
+            <p><strong>Principle:</strong> User maintains full control. Remote access is opt-in per session.</p>
+        </div>
+        
+        <h3>Authentication</h3>
+        <p>Extension authenticates using JWT token (same as web app). Token obtained by user clicking "Connect" in extension UI.</p>
+        
+        <div class="code-block">
+// Extension includes token in all requests
+headers: {
+  "Authorization": "Bearer eyJhbGciOiJIUzI1NiIs...",
+  "X-Extension-Version": "1.0.0"
+}
+        </div>
+        
+        <h3>User Consent</h3>
+        <table>
+            <tr>
+                <th>Control</th>
+                <th>Description</th>
+            </tr>
+            <tr>
+                <td>Visual Indicator</td>
+                <td>Green border around page when Eliezer is controlling</td>
+            </tr>
+            <tr>
+                <td>Disconnect Anytime</td>
+                <td>User can click "Disconnect" to immediately sever connection</td>
+            </tr>
+            <tr>
+                <td>Command Preview</td>
+                <td>Show incoming command before execution (optional)</td>
+            </tr>
+            <tr>
+                <td>Site Restrictions</td>
+                <td>User can blacklist sensitive sites (banking, email)</td>
+            </tr>
+        </table>
+        
+        <h3>Session Management</h3>
+        <ul style="margin: 10px 0 10px 20px; font-size: 13px; color: #555;">
+            <li>Sessions expire after 1 hour of inactivity</li>
+            <li>User can revoke sessions from web app</li>
+            <li>Extension shows "Last command" timestamp</li>
+            <li>All commands logged for audit</li>
+        </ul>
+    </div>
+    
+    <div class="section" id="commands">
+        <h2>6. Command Reference</h2>
+        
+        <h3>Navigation</h3>
+        <div class="code-block">
+{
+  "action": "navigate",
+  "params": { "url": "https://example.com", "waitUntil": "networkidle" }
+}
+        </div>
+        
+        <h3>Interaction</h3>
+        <div class="code-block">
+{
+  "action": "click",
+  "params": { "selector": "button.submit", "timeout": 5000 }
+}
+
+{
+  "action": "fill",
+  "params": { "selector": "input#email", "value": "user@example.com" }
+}
+        </div>
+        
+        <h3>Extraction</h3>
+        <div class="code-block">
+{
+  "action": "extract",
+  "params": { 
+    "selector": "article.post",
+    "attributes": ["textContent", "href"],
+    "multiple": true
+  }
+}
+        </div>
+        
+        <h3>Screenshot</h3>
+        <div class="code-block">
+{
+  "action": "screenshot",
+  "params": { "fullPage": true, "format": "png" }
+}
+// Returns: base64 encoded image in result
+        </div>
+        
+        <h3>JavaScript</h3>
+        <div class="code-block">
+{
+  "action": "execute",
+  "params": { 
+    "script": "document.querySelector('h1').textContent",
+    "returnByValue": true
+  }
+}
+        </div>
+        
+        <h3>Tabs</h3>
+        <div class="code-block">
+{
+  "action": "newTab",
+  "params": { "url": "https://example.com", "active": true }
+}
+
+{
+  "action": "listTabs",
+  "params": {}
+}
+// Returns: array of tab objects with id, url, title, active
+        </div>
+    </div>
+    
+    <div class="section" id="phases">
+        <h2>7. Implementation Phases</h2>
+        
+        <div class="phase">
+            <div class="num">1</div>
+            <div class="content">
+                <h4>MVP Extension</h4>
+                <p>Basic manifest v3 extension. Connect button, SSE connection, navigate command only. Single HTML page UI.</p>
+            </div>
+        </div>
+        
+        <div class="phase">
+            <div class="num">2</div>
+            <div class="content">
+                <h4>Server Endpoints</h4>
+                <p>Clawchat: /api/browser/events (SSE), /api/browser/response (POST), /api/browser/state (POST). Simple in-memory queue.</p>
+            </div>
+        </div>
+        
+        <div class="phase">
+            <div class="num">3</div>
+            <div class="content">
+                <h4>Eliezer Tool</h4>
+                <p>New tool: `browser_control`. Sends commands, receives results via message queue. Screenshot display in chat.</p>
+            </div>
+        </div>
+        
+        <div class="phase">
+            <div class="num">4</div>
+            <div class="content">
+                <h4>Rich Commands</h4>
+                <p>Add click, fill, extract, screenshot, executeScript. Shadow DOM UI panel (inspired by MCP Chrome).</p>
+            </div>
+        </div>
+        
+        <div class="phase">
+            <div class="num">5</div>
+            <div class="content">
+                <h4>Security & Polish</h4>
+                <p>Visual indicator, disconnect button, site blacklist, session management, audit logs.</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="section" id="endpoints">
+        <h2>8. API Endpoints</h2>
+        
+        <h3>Extension → Server</h3>
+        <div class="endpoint">
+            <span class="method get">GET</span>
+            <span class="path">/api/browser/events</span>
+            <div class="desc">SSE stream. Receive commands from Eliezer. Auth required.</div>
+        </div>
+        
+        <div class="endpoint">
+            <span class="method post">POST</span>
+            <span class="path">/api/browser/response</span>
+            <div class="desc">Submit command execution result. Auth required.</div>
+        </div>
+        
+        <div class="endpoint">
+            <span class="method post">POST</span>
+            <span class="path">/api/browser/state</span>
+            <div class="desc">Heartbeat with current browser state. Auth required.</div>
+        </div>
+        
+        <h3>Eliezer → Server</h3>
+        <div class="endpoint">
+            <span class="method post">POST</span>
+            <span class="path">/api/browser/send-command</span>
+            <div class="desc">Send command to connected browser. Returns command ID for tracking.</div>
+        </div>
+        
+        <div class="endpoint">
+            <span class="method get">GET</span>
+            <span class="path">/api/browser/sessions</span>
+            <div class="desc">List active browser sessions for current user.</div>
+        </div>
+        
+        <div class="endpoint">
+            <span class="method post">POST</span>
+            <span class="path">/api/browser/disconnect/:sessionId</span>
+            <div class="desc">Force disconnect a browser session.</div>
+        </div>
+    </div>
+    
+    <div class="section" id="auth">
+        <h2>9. Authentication Flow</h2>
+        
+        <h3>Seamless Token Handoff</h3>
+        <p>No copy/paste. One button click connects the extension.</p>
+        
+        <div class="mermaid">
+sequenceDiagram
+    actor U as User
+    participant W as Clawchat Web App
+    participant C as Content Script
+    participant E as Extension
+    participant S as Server
+
+    U->>W: Click "Enable browser control"
+    W->>C: window.postMessage({type: 'PING_EXTENSION'})
+    alt Extension Installed
+        C->>E: chrome.runtime.sendMessage('PING')
+        E-->>C: {installed: true}
+        C-->>W: postMessage({type: 'EXTENSION_FOUND'})
+        W->>S: POST /api/extension/token
+        S-->>W: {token: jwt}
+        W->>C: window.postMessage({type: 'CLAWCHAT_AUTH', token: jwt})
+        C->>E: chrome.runtime.sendMessage({type: 'STORE_TOKEN', token: jwt})
+        E-->>C: {stored: true}
+        C-->>W: postMessage({type: 'AUTH_SUCCESS'})
+        W-->>U: Show "Connected ✓"
+    else Extension Not Installed
+        C-->>W: timeout (no response)
+        W-->>U: Show "Install Extension" modal
+        U->>W: Click "Install from Source"
+        W-->>U: Show instructions + download link
+    end
+        </div>
+        
+        <h3>Content Script Bridge</h3>
+        <p>Extension injects content script on clawchat.app to enable cross-origin communication.</p>
+        
+        <div class="code-block">
+// content-bridge.js (runs on clawchat.app)
+window.addEventListener('message', (event) => {
+  if (event.origin !== 'https://clawchat.app') return;
+  
+  switch (event.data.type) {
+    case 'PING_EXTENSION':
+      chrome.runtime.sendMessage({type: 'PING'}, (response) => {
+        window.postMessage({type: 'EXTENSION_FOUND'}, '*');
+      });
+      break;
+      
+    case 'CLAWCHAT_AUTH':
+      chrome.runtime.sendMessage({
+        type: 'STORE_TOKEN',
+        token: event.data.token
+      }, (response) => {
+        window.postMessage({type: 'AUTH_SUCCESS'}, '*');
+      });
+      break;
+  }
+});
+        </div>
+        
+        <h3>Extension Storage</h3>
+        <div class="code-block">
+// background.js
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === 'STORE_TOKEN') {
+    chrome.storage.local.set({
+      clawchatToken: request.token,
+      connectedAt: Date.now()
+    }, () => {
+      updateBadge('connected');
+      sendResponse({stored: true});
+    });
+    return true; // async response
+  }
+});
+        </div>
+        
+        <h3>Installation Fallback</h3>
+        <p>When extension is not detected, user sees:</p>
+        <ul style="margin: 10px 0 10px 20px; font-size: 13px; color: #555;">
+            <li><strong>Chrome Web Store</strong> (when published): One-click install</li>
+            <li><strong>Install from Source:</strong> Download zip, load unpacked in chrome://extensions</li>
+            <li><strong>Auto-retry:</strong> After installation, page auto-detects extension</li>
+        </ul>
+        
+        <h3>Token Security</h3>
+        <table>
+            <tr>
+                <th>Property</th>
+                <th>Value</th>
+            </tr>
+            <tr>
+                <td>Type</td>
+                <td>JWT (HS256)</td>
+            </tr>
+            <tr>
+                <td>Expiry</td>
+                <td>30 days</td>
+            </tr>
+            <tr>
+                <td>Scope</td>
+                <td>extension only (limited permissions)</td>
+            </tr>
+            <tr>
+                <td>Storage</td>
+                <td>chrome.storage.local (encrypted by OS)</td>
+            </tr>
+            <tr>
+                <td>Revocation</td>
+                <td>User can revoke from web app anytime</td>
+            </tr>
+        </table>
+    </div>
+    
+    <div class="section" id="todo">
+        <h2>10. TODO</h2>
+        <ul style="list-style:none;padding:0;">
+            <li><input type="checkbox" disabled> MVP Chrome extension (manifest v3, connect button, SSE connection)</li>
+            <li><input type="checkbox" disabled> Clawchat: <code>GET /api/browser/events</code> SSE endpoint</li>
+            <li><input type="checkbox" disabled> Clawchat: <code>POST /api/browser/send-command</code> endpoint</li>
+            <li><input type="checkbox" disabled> Clawchat: <code>POST /api/browser/response</code> → push to eliezer event queue</li>
+            <li><input type="checkbox" disabled> Clawchat: <code>POST /api/browser/state</code> heartbeat endpoint</li>
+            <li><input type="checkbox" disabled> Eliezer: <code>browser_control</code> tool with event-based response awaiting</li>
+            <li><input type="checkbox" disabled> JWT auth flow (content script bridge, token handoff)</li>
+            <li><input type="checkbox" disabled> Navigate command (end-to-end)</li>
+            <li><input type="checkbox" disabled> Click, fill, extract commands</li>
+            <li><input type="checkbox" disabled> Screenshot command (base64 → chat)</li>
+            <li><input type="checkbox" disabled> JavaScript execution command</li>
+            <li><input type="checkbox" disabled> Tab management (new, list, switch)</li>
+            <li><input type="checkbox" disabled> Vet extracted content through <code>vetContent()</code></li>
+            <li><input type="checkbox" disabled> Visual indicator (green border when controlled)</li>
+            <li><input type="checkbox" disabled> Disconnect button + session management</li>
+            <li><input type="checkbox" disabled> Site blacklist</li>
+            <li><input type="checkbox" disabled> Timeout handling (30s command timeout)</li>
+            <li><input type="checkbox" disabled> Add to TOC</li>
+        </ul>
+    </div>
+
+    <div class="footer">
+        Browser Control Architecture | Eliezer Project | 2026-02-16
+    </div>
+</body>
+</html>
