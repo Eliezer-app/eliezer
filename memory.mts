@@ -266,7 +266,8 @@ export class Memory {
 	/** Log a compaction operation. */
 	logCompaction(op: string, groupStart: number, groupEnd: number, tokensBefore: number, tokensAfter: number, reason: string, tokenBudget: number): void {
 		const pct = Math.round(tokensBefore / tokenBudget * 100);
-		const full = `${reason}, ${tokensBefore} -> ${tokensAfter} tokens (${pct}% of ${Math.round(tokenBudget / 1000)}k)`;
+		const k = (n: number) => n >= 10000 ? Math.round(n / 1000) + 'k' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+		const full = `${reason}, rows ${groupStart}-${groupEnd}, ${k(tokensBefore)} -> ${k(tokensAfter)} tokens (${pct}% of ${k(tokenBudget)})`;
 		this.db.prepare(
 			'INSERT INTO compaction_log (op, group_start, group_end, tokens_before, tokens_after, reason) VALUES (?, ?, ?, ?, ?, ?)'
 		).run(op, groupStart, groupEnd, tokensBefore, tokensAfter, full);
@@ -399,12 +400,12 @@ export class Memory {
 		).get() as { count: number };
 
 		const compressions = this.db.prepare(
-			"SELECT created_at FROM compaction_log WHERE op = 'compress' ORDER BY id DESC LIMIT 10"
-		).all() as Array<{ created_at: string }>;
+			"SELECT created_at, reason FROM compaction_log WHERE op = 'compress' ORDER BY id DESC LIMIT 10"
+		).all() as Array<{ created_at: string; reason: string }>;
 
 		const distillations = this.db.prepare(
-			"SELECT created_at FROM compaction_log WHERE op = 'distill' ORDER BY id DESC LIMIT 10"
-		).all() as Array<{ created_at: string }>;
+			"SELECT created_at, reason FROM compaction_log WHERE op = 'distill' ORDER BY id DESC LIMIT 10"
+		).all() as Array<{ created_at: string; reason: string }>;
 
 		const systemTokens = estimateTokens(systemText);
 		const memoryTokens = estimateTokens(memoryText);
@@ -421,8 +422,8 @@ export class Memory {
 			},
 			archived: { messages: archived.count },
 			ops: {
-				compressions: compressions.map(r => r.created_at),
-				distillations: distillations.map(r => r.created_at),
+				compressions: compressions.map(r => ({ at: r.created_at, reason: r.reason })),
+				distillations: distillations.map(r => ({ at: r.created_at, reason: r.reason })),
 			},
 		};
 	}

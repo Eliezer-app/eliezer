@@ -55,8 +55,10 @@ export function startServer(deps: ServerDeps) {
 		//   context.total.pct          number       — total percentage of budget used
 		//   context.budget             number       — token budget for context window
 		//   archived.messages          number       — messages archived out of context (in DB)
-		//   ops.compressions            string[]     — last 10 compress timestamps (newest first)
-		//   ops.distillations           string[]     — last 10 distill timestamps (newest first)
+		//   ops.compressions[].at       string       — timestamp
+		//   ops.compressions[].reason   string       — compaction reason
+		//   ops.distillations[].at      string       — timestamp
+		//   ops.distillations[].reason  string       — distillation reason
 		if (req.method === 'GET' && req.url === '/info/memory') {
 			json(res, 200, getMemory());
 			return;
