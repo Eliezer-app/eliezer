@@ -270,8 +270,8 @@
             <li><a href="#security">5. Security Model</a></li>
             <li><a href="#commands">6. Command Reference</a></li>
             <li><a href="#phases">7. Implementation Phases</a></li>
-            <li><a href="#endpoints">8. API Endpoints</a></li>
-            <li><a href="#auth">9. Authentication Flow</a></li>
+            <li><a href="#integration">8. Integration Points</a></li>
+            <li><a href="#todo">9. TODO</a></li>
         </ul>
     </div>
     
@@ -282,10 +282,10 @@
         <p>Playwright provides headless browser automation but cannot access personal browser sessions (cookies, logins). We need a solution that lets Eliezer control the user's actual Chrome/Firefox browser remotely.</p>
         
         <h3>Solution</h3>
-        <p>A Chrome/Firefox extension that connects to the Clawchat server via SSE + REST (the proven pattern used by the web app). This gives Eliezer full control of the user's browser with their explicit permission.</p>
-        
+        <p>A Chrome extension that communicates exclusively through the Clawchat web app tab via <code>postMessage</code>. The extension never talks to the server directly — the web app relays commands and results. The web app tab being open <em>is</em> the consent mechanism: close the tab, kill the connection.</p>
+
         <div class="highlight-box">
-            <p><strong>Key Principle:</strong> Reuse existing infrastructure. The web app already proves SSE + REST works bidirectionally without WebSockets. No new protocols needed.</p>
+            <p><strong>Key Principle:</strong> Zero extension auth. The web app is already authenticated. The extension is a dumb executor that only listens to the web app page. No tokens, no JWTs, no revocation — closing the tab severs all control.</p>
         </div>
         
         <h3>Capabilities</h3>
@@ -380,7 +380,7 @@ const response = await fetch("http://127.0.0.1:8888/run", {
                 <td>Protocol</td>
                 <td>MCP over native host</td>
                 <td>HTTP REST</td>
-                <td>SSE + REST (reuse clawchat)</td>
+                <td>postMessage via web app</td>
             </tr>
             <tr>
                 <td>Backend</td>
@@ -392,210 +392,173 @@ const response = await fetch("http://127.0.0.1:8888/run", {
                 <td>Auth</td>
                 <td>None (local only)</td>
                 <td>None (local only)</td>
-                <td>Token-based</td>
+                <td>None (web app is the auth boundary)</td>
             </tr>
             <tr>
                 <td>Connection</td>
                 <td>Extension → Local</td>
                 <td>Extension → Local</td>
-                <td>Extension → Remote</td>
+                <td>Extension → Web App → Server</td>
             </tr>
         </table>
     </div>
     
     <div class="section" id="architecture">
         <h2>3. System Architecture</h2>
-        
+
         <div class="mermaid">
 sequenceDiagram
     participant E as Eliezer
     participant S as Clawchat Server
-    participant X as Chrome Extension
-    participant B as Browser
+    participant W as Web App (tab)
+    participant C as Content Script
+    participant X as Extension (background)
+    participant B as Target Tab
 
     Note over E: Wants to navigate<br/>to linkedin.com
-    E->>S: POST /send-command<br/>{action: "navigate"}
-    S-->>X: SSE: push command
-    X->>B: window.location.href = ...
-    B-->>X: Page loaded
-    X->>S: POST /response<br/>{status: "success"}
-    S-->>E: Command complete
+    E->>S: POST /send<br/>{type: "tool_remote_exec"}
+    S-->>W: SSE: tool_remote_exec
+    W->>C: window.postMessage({command})
+    C->>X: chrome.runtime.sendMessage
+    X->>B: chrome.tabs / scripting API
+    B-->>X: Result
+    X->>C: response callback
+    C->>W: window.postMessage({result})
+    W->>S: POST /api/messages<br/>{type: "tool_remote_exec_response"}
+    S->>E: POST /events (message passthrough)
         </div>
-        
+
         <h3>Components</h3>
-        
+
         <div class="phase">
             <div class="num">1</div>
             <div class="content">
                 <h4>Chrome Extension</h4>
-                <p>Runs in user's browser. Injects UI panel, executes commands, communicates with server.</p>
+                <p>Dumb executor. No server awareness, no auth. Listens for commands from content script via <code>chrome.runtime.sendMessage</code>, executes on target tabs, returns results.</p>
             </div>
         </div>
-        
+
         <div class="phase">
             <div class="num">2</div>
             <div class="content">
-                <h4>Clawchat Server</h4>
-                <p>Existing infrastructure. New endpoints for browser control. Reuses auth system.</p>
+                <h4>Clawchat Web App</h4>
+                <p>The relay. Receives <code>tool_remote_exec</code> messages via existing SSE, forwards to extension via <code>postMessage</code> on the page. Receives results back the same way, POSTs them to server. Already authenticated — no new auth needed.</p>
             </div>
         </div>
-        
+
         <div class="phase">
             <div class="num">3</div>
             <div class="content">
-                <h4>Eliezer Integration</h4>
-                <p>New tool: `browser_control`. Sends commands via chat API, receives results.</p>
+                <h4>Clawchat Server</h4>
+                <p>Existing infrastructure. No new endpoints, no new event types. Commands flow as <code>tool_remote_exec</code> messages via <code>POST /send</code>. Responses flow as <code>tool_remote_exec_response</code> messages via <code>POST /api/messages</code>. Both are just messages — Clawchat doesn't need to know what's inside.</p>
+            </div>
+        </div>
+
+        <div class="phase">
+            <div class="num">4</div>
+            <div class="content">
+                <h4>Eliezer</h4>
+                <p>New tool: <code>browser_control</code>. Sends commands via <code>chat.send('default', payload, 'tool_remote_exec')</code>. Awaits incoming <code>chat:user_message</code> with <code>type: tool_remote_exec_response</code> matching command ID.</p>
             </div>
         </div>
     </div>
     
     <div class="section" id="protocol">
         <h2>4. Communication Protocol</h2>
-        
-        <h3>Direction 1: Server → Extension (Commands)</h3>
-        <p>Extension opens SSE connection to receive commands from Eliezer.</p>
-        
-        <div class="endpoint">
-            <span class="method get">GET</span>
-            <span class="path">/api/browser/events</span>
-            <div class="desc">SSE stream for receiving commands. Extension connects and maintains persistent connection.</div>
-        </div>
-        
-        <div class="code-block">
-// Server sends command via SSE
-event: command
-data: {
-  "id": "cmd-uuid-123",
-  "action": "navigate",
-  "params": {
-    "url": "https://linkedin.com"
-  },
-  "timestamp": 1708000000000
-}
-        </div>
-        
-        <h3>Direction 2: Extension → Server (Results)</h3>
-        <p>Extension POSTs results after executing commands.</p>
-        
-        <div class="endpoint">
-            <span class="method post">POST</span>
-            <span class="path">/api/browser/response</span>
-            <div class="desc">Submit command result after execution</div>
-        </div>
-        
-        <div class="code-block">
-// Extension POSTs result
-{
-  "commandId": "cmd-uuid-123",
-  "status": "success",
-  "result": {
-    "title": "LinkedIn",
-    "url": "https://www.linkedin.com/feed",
-    "loadTime": 1200
-  },
-  "timestamp": 1708000005000
-}
-        </div>
-        
-        <h3>Direction 3: Extension → Server (State)</h3>
-        <p>Extension periodically reports current page state.</p>
-        
-        <div class="endpoint">
-            <span class="method post">POST</span>
-            <span class="path">/api/browser/state</span>
-            <div class="desc">Periodic heartbeat with current browser state</div>
-        </div>
-        
-        <div class="code-block">
-// Heartbeat every 5 seconds
-{
-  "sessionId": "ext-session-456",
-  "connected": true,
-  "currentUrl": "https://example.com",
-  "pageTitle": "Example Domain",
-  "ready": true,
-  "timestamp": 1708000010000
-}
-        </div>
 
-        <h3>Direction 4: Server → Eliezer (Response Delivery)</h3>
-        <p>Clawchat receives the extension's response POST and pushes a <code>browser:response</code> event to Eliezer's event queue (<code>POST /events</code>). The tool resolves its promise when the matching event arrives. 30s timeout.</p>
+        <p>All communication reuses existing infrastructure. No new server endpoints. Two new message/event types on existing channels.</p>
 
-        <div class="mermaid">
-sequenceDiagram
-    participant E as Eliezer (tool)
-    participant S as Clawchat Server
-    participant X as Chrome Extension
+        <h3>Command path (Eliezer → Extension)</h3>
+        <p>Eliezer sends via existing <code>chat.send()</code> with type <code>tool_remote_exec</code>. Server pushes to web app via existing SSE. Web app relays to extension via <code>postMessage</code> → content script → <code>chrome.runtime.sendMessage</code>.</p>
 
-    E->>S: POST /api/browser/send-command<br/>{id: "cmd-123", action: "navigate"}
-    Note over E: tool awaits promise<br/>with timeout (30s)
-    S-->>X: SSE: command {id: "cmd-123"}
-    X->>X: Execute command
-    X->>S: POST /api/browser/response<br/>{commandId: "cmd-123", result: {...}}
-    S->>E: POST /events<br/>{type: "browser:response",<br/>payload: {commandId: "cmd-123", ...}}
-    Note over E: promise resolves,<br/>tool returns result
+        <div class="code-block">
+// Eliezer sends command
+chat.send('default', JSON.stringify({
+  commandId: "cmd-123",
+  action: "navigate",
+  params: { url: "https://linkedin.com" }
+}), 'tool_remote_exec');
         </div>
 
         <div class="code-block">
-// browser_control tool (eliezer side)
+// Web app receives via SSE, relays to extension
+window.postMessage({
+  type: 'ELIEZER_COMMAND',
+  commandId: "cmd-123",
+  action: "navigate",
+  params: { url: "https://linkedin.com" }
+}, '*');
+        </div>
+
+        <h3>Response path (Extension → Eliezer)</h3>
+        <p>Extension sends result back via <code>chrome.runtime.sendMessage</code> → content script → <code>postMessage</code> → web app. Web app POSTs to <code>/api/messages</code> — the same endpoint used for regular user messages. Clawchat pushes it to Eliezer as a normal <code>chat:user_message</code> event. Eliezer checks for <code>type</code> field to distinguish from regular messages.</p>
+
+        <div class="code-block">
+// Web app forwards result as a message
+fetch('/api/messages', {
+  method: 'POST',
+  body: JSON.stringify({
+    type: 'tool_remote_exec_response',
+    content: { commandId: "cmd-123", status: "success", result: {...} }
+  })
+});
+        </div>
+
+        <h3>Eliezer tool (awaiting response)</h3>
+
+        <div class="code-block">
+// browser_control tool
 async call({ action, params }) {
   const commandId = crypto.randomUUID();
-  const promise = this.waitForEvent('browser:response', commandId, 30_000);
-  await chatClient.sendBrowserCommand({ id: commandId, action, params });
+  const promise = this.waitForMessage('tool_remote_exec_response', commandId, 30_000);
+  await chat.send('default', JSON.stringify({ commandId, action, params }), 'tool_remote_exec');
   const result = await promise;
   return result;
 }
         </div>
+
+        <p>The message body is a discriminated union: if it has <code>type</code>, it's a typed event; otherwise it's a regular <code>{ content }</code> user message. Clawchat doesn't need to know the difference — it just pushes messages through. Any future remote tool can use the same pattern.</p>
     </div>
 
     <div class="section" id="security">
         <h2>5. Security Model</h2>
-        
+
         <div class="highlight-box">
-            <p><strong>Principle:</strong> User maintains full control. Remote access is opt-in per session.</p>
+            <p><strong>Principle:</strong> Web app tab open = consent. Close the tab = kill all control. No tokens, no sessions, no revocation.</p>
         </div>
-        
+
         <h3>Authentication</h3>
-        <p>Extension authenticates using JWT token (same as web app). Token obtained by user clicking "Connect" in extension UI.</p>
-        
-        <div class="code-block">
-// Extension includes token in all requests
-headers: {
-  "Authorization": "Bearer eyJhbGciOiJIUzI1NiIs...",
-  "X-Extension-Version": "1.0.0"
-}
-        </div>
-        
-        <h3>User Consent</h3>
+        <p>None for the extension. The extension never talks to the server. All server communication goes through the web app, which is already authenticated. The extension only receives commands via <code>postMessage</code> from the clawchat page.</p>
+
+        <h3>Consent Model</h3>
         <table>
             <tr>
                 <th>Control</th>
                 <th>Description</th>
             </tr>
             <tr>
-                <td>Visual Indicator</td>
-                <td>Green border around page when Eliezer is controlling</td>
+                <td>Tab open = active</td>
+                <td>Browser control only works while the clawchat web app tab is open</td>
             </tr>
             <tr>
-                <td>Disconnect Anytime</td>
-                <td>User can click "Disconnect" to immediately sever connection</td>
+                <td>Close tab = kill</td>
+                <td>Closing the web app tab immediately severs all control</td>
             </tr>
             <tr>
-                <td>Command Preview</td>
-                <td>Show incoming command before execution (optional)</td>
+                <td>Visual indicator</td>
+                <td>Green border on controlled tab when Eliezer is active</td>
             </tr>
             <tr>
-                <td>Site Restrictions</td>
-                <td>User can blacklist sensitive sites (banking, email)</td>
+                <td>Site blacklist</td>
+                <td>Extension ignores commands for blacklisted domains (banking, email)</td>
             </tr>
         </table>
-        
-        <h3>Session Management</h3>
+
+        <h3>Attack surface</h3>
         <ul style="margin: 10px 0 10px 20px; font-size: 13px; color: #555;">
-            <li>Sessions expire after 1 hour of inactivity</li>
-            <li>User can revoke sessions from web app</li>
-            <li>Extension shows "Last command" timestamp</li>
-            <li>All commands logged for audit</li>
+            <li>Extension content script runs on clawchat page — <code>postMessage</code> origin check is critical</li>
+            <li>Extension has no secrets to leak — worst case, a compromised extension executes browser commands while the tab is open</li>
+            <li>Extracted page content is untrusted — must go through <code>vetContent()</code> before reaching the agent</li>
         </ul>
     </div>
     
@@ -672,227 +635,103 @@ headers: {
     
     <div class="section" id="phases">
         <h2>7. Implementation Phases</h2>
-        
+
         <div class="phase">
             <div class="num">1</div>
             <div class="content">
-                <h4>MVP Extension</h4>
-                <p>Basic manifest v3 extension. Connect button, SSE connection, navigate command only. Single HTML page UI.</p>
+                <h4>MVP: Navigate end-to-end</h4>
+                <p>Extension (manifest v3, content script on clawchat page, background script). Web app listens for <code>tool_remote_exec</code> SSE, relays via postMessage. Navigate command only. Verify full round-trip.</p>
             </div>
         </div>
-        
+
         <div class="phase">
             <div class="num">2</div>
             <div class="content">
-                <h4>Server Endpoints</h4>
-                <p>Clawchat: /api/browser/events (SSE), /api/browser/response (POST), /api/browser/state (POST). Simple in-memory queue.</p>
+                <h4>Eliezer tool + response flow</h4>
+                <p><code>browser_control</code> tool in eliezer. <code>tool:response</code> event type in Clawchat. Web app POSTs results back. End-to-end: agent sends navigate, gets page title back.</p>
             </div>
         </div>
-        
+
         <div class="phase">
             <div class="num">3</div>
             <div class="content">
-                <h4>Eliezer Tool</h4>
-                <p>New tool: `browser_control`. Sends commands, receives results via message queue. Screenshot display in chat.</p>
+                <h4>Rich commands</h4>
+                <p>Click, fill, extract, screenshot, executeScript, tab management. Vet extracted content through <code>vetContent()</code>.</p>
             </div>
         </div>
-        
+
         <div class="phase">
             <div class="num">4</div>
             <div class="content">
-                <h4>Rich Commands</h4>
-                <p>Add click, fill, extract, screenshot, executeScript. Shadow DOM UI panel (inspired by MCP Chrome).</p>
-            </div>
-        </div>
-        
-        <div class="phase">
-            <div class="num">5</div>
-            <div class="content">
-                <h4>Security & Polish</h4>
-                <p>Visual indicator, disconnect button, site blacklist, session management, audit logs.</p>
+                <h4>Polish</h4>
+                <p>Visual indicator on controlled tab, site blacklist, timeout handling, error reporting.</p>
             </div>
         </div>
     </div>
     
-    <div class="section" id="endpoints">
-        <h2>8. API Endpoints</h2>
-        
-        <h3>Extension → Server</h3>
-        <div class="endpoint">
-            <span class="method get">GET</span>
-            <span class="path">/api/browser/events</span>
-            <div class="desc">SSE stream. Receive commands from Eliezer. Auth required.</div>
-        </div>
-        
-        <div class="endpoint">
-            <span class="method post">POST</span>
-            <span class="path">/api/browser/response</span>
-            <div class="desc">Submit command execution result. Auth required.</div>
-        </div>
-        
-        <div class="endpoint">
-            <span class="method post">POST</span>
-            <span class="path">/api/browser/state</span>
-            <div class="desc">Heartbeat with current browser state. Auth required.</div>
-        </div>
-        
-        <h3>Eliezer → Server</h3>
-        <div class="endpoint">
-            <span class="method post">POST</span>
-            <span class="path">/api/browser/send-command</span>
-            <div class="desc">Send command to connected browser. Returns command ID for tracking.</div>
-        </div>
-        
-        <div class="endpoint">
-            <span class="method get">GET</span>
-            <span class="path">/api/browser/sessions</span>
-            <div class="desc">List active browser sessions for current user.</div>
-        </div>
-        
-        <div class="endpoint">
-            <span class="method post">POST</span>
-            <span class="path">/api/browser/disconnect/:sessionId</span>
-            <div class="desc">Force disconnect a browser session.</div>
-        </div>
-    </div>
-    
-    <div class="section" id="auth">
-        <h2>9. Authentication Flow</h2>
-        
-        <h3>Seamless Token Handoff</h3>
-        <p>No copy/paste. One button click connects the extension.</p>
-        
-        <div class="mermaid">
-sequenceDiagram
-    actor U as User
-    participant W as Clawchat Web App
-    participant C as Content Script
-    participant E as Extension
-    participant S as Server
+    <div class="section" id="integration">
+        <h2>8. Integration Points</h2>
 
-    U->>W: Click "Enable browser control"
-    W->>C: window.postMessage({type: 'PING_EXTENSION'})
-    alt Extension Installed
-        C->>E: chrome.runtime.sendMessage('PING')
-        E-->>C: {installed: true}
-        C-->>W: postMessage({type: 'EXTENSION_FOUND'})
-        W->>S: POST /api/extension/token
-        S-->>W: {token: jwt}
-        W->>C: window.postMessage({type: 'CLAWCHAT_AUTH', token: jwt})
-        C->>E: chrome.runtime.sendMessage({type: 'STORE_TOKEN', token: jwt})
-        E-->>C: {stored: true}
-        C-->>W: postMessage({type: 'AUTH_SUCCESS'})
-        W-->>U: Show "Connected ✓"
-    else Extension Not Installed
-        C-->>W: timeout (no response)
-        W-->>U: Show "Install Extension" modal
-        U->>W: Click "Install from Source"
-        W-->>U: Show instructions + download link
-    end
-        </div>
-        
-        <h3>Content Script Bridge</h3>
-        <p>Extension injects content script on clawchat.app to enable cross-origin communication.</p>
-        
-        <div class="code-block">
-// content-bridge.js (runs on clawchat.app)
-window.addEventListener('message', (event) => {
-  if (event.origin !== 'https://clawchat.app') return;
-  
-  switch (event.data.type) {
-    case 'PING_EXTENSION':
-      chrome.runtime.sendMessage({type: 'PING'}, (response) => {
-        window.postMessage({type: 'EXTENSION_FOUND'}, '*');
-      });
-      break;
-      
-    case 'CLAWCHAT_AUTH':
-      chrome.runtime.sendMessage({
-        type: 'STORE_TOKEN',
-        token: event.data.token
-      }, (response) => {
-        window.postMessage({type: 'AUTH_SUCCESS'}, '*');
-      });
-      break;
-  }
-});
-        </div>
-        
-        <h3>Extension Storage</h3>
-        <div class="code-block">
-// background.js
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === 'STORE_TOKEN') {
-    chrome.storage.local.set({
-      clawchatToken: request.token,
-      connectedAt: Date.now()
-    }, () => {
-      updateBadge('connected');
-      sendResponse({stored: true});
-    });
-    return true; // async response
-  }
-});
-        </div>
-        
-        <h3>Installation Fallback</h3>
-        <p>When extension is not detected, user sees:</p>
-        <ul style="margin: 10px 0 10px 20px; font-size: 13px; color: #555;">
-            <li><strong>Chrome Web Store</strong> (when published): One-click install</li>
-            <li><strong>Install from Source:</strong> Download zip, load unpacked in chrome://extensions</li>
-            <li><strong>Auto-retry:</strong> After installation, page auto-detects extension</li>
-        </ul>
-        
-        <h3>Token Security</h3>
+        <p>No new server endpoints. Two new message types on existing channels:</p>
+
         <table>
             <tr>
-                <th>Property</th>
-                <th>Value</th>
+                <th>What</th>
+                <th>Channel</th>
+                <th>Message type</th>
             </tr>
             <tr>
-                <td>Type</td>
-                <td>JWT (HS256)</td>
+                <td>Command (Eliezer → extension)</td>
+                <td>Existing <code>POST /send</code></td>
+                <td><code>tool_remote_exec</code></td>
             </tr>
             <tr>
-                <td>Expiry</td>
-                <td>30 days</td>
-            </tr>
-            <tr>
-                <td>Scope</td>
-                <td>extension only (limited permissions)</td>
-            </tr>
-            <tr>
-                <td>Storage</td>
-                <td>chrome.storage.local (encrypted by OS)</td>
-            </tr>
-            <tr>
-                <td>Revocation</td>
-                <td>User can revoke from web app anytime</td>
+                <td>Response (extension → Eliezer)</td>
+                <td>Existing <code>POST /api/messages</code></td>
+                <td><code>tool_remote_exec_response</code></td>
             </tr>
         </table>
+
+        <h3>Web app changes</h3>
+        <ul style="margin: 10px 0 10px 20px; font-size: 13px; color: #555;">
+            <li>Listen for <code>tool_remote_exec</code> messages on SSE, relay to extension via <code>postMessage</code></li>
+            <li>Listen for <code>ELIEZER_RESULT</code> postMessages from content script, POST to <code>/api/messages</code> as <code>{ type: "tool_remote_exec_response", content: ... }</code></li>
+            <li>Extension detection: ping via <code>postMessage</code>, show status indicator</li>
+        </ul>
+
+        <h3>Content script bridge</h3>
+        <div class="code-block">
+// content-bridge.js (injected on clawchat page)
+window.addEventListener('message', (event) => {
+  if (event.source !== window) return;
+
+  if (event.data.type === 'ELIEZER_COMMAND') {
+    // Relay command to background script
+    chrome.runtime.sendMessage(event.data, (response) => {
+      window.postMessage({ type: 'ELIEZER_RESULT', ...response }, '*');
+    });
+  }
+});
+        </div>
     </div>
     
     <div class="section" id="todo">
-        <h2>10. TODO</h2>
+        <h2>9. TODO</h2>
         <ul style="list-style:none;padding:0;">
-            <li><input type="checkbox" disabled> MVP Chrome extension (manifest v3, connect button, SSE connection)</li>
-            <li><input type="checkbox" disabled> Clawchat: <code>GET /api/browser/events</code> SSE endpoint</li>
-            <li><input type="checkbox" disabled> Clawchat: <code>POST /api/browser/send-command</code> endpoint</li>
-            <li><input type="checkbox" disabled> Clawchat: <code>POST /api/browser/response</code> → push to eliezer event queue</li>
-            <li><input type="checkbox" disabled> Clawchat: <code>POST /api/browser/state</code> heartbeat endpoint</li>
-            <li><input type="checkbox" disabled> Eliezer: <code>browser_control</code> tool with event-based response awaiting</li>
-            <li><input type="checkbox" disabled> JWT auth flow (content script bridge, token handoff)</li>
-            <li><input type="checkbox" disabled> Navigate command (end-to-end)</li>
+            <li><input type="checkbox" disabled> Chrome extension: manifest v3, content script on clawchat page, background script</li>
+            <li><input type="checkbox" disabled> Content script bridge: postMessage relay to/from background script</li>
+            <li><input type="checkbox" disabled> Web app: listen for <code>tool_remote_exec</code> on SSE, relay via postMessage</li>
+            <li><input type="checkbox" disabled> Web app: listen for <code>ELIEZER_RESULT</code> postMessage, POST to <code>/api/messages</code> as <code>tool_remote_exec_response</code></li>
+            <li><input type="checkbox" disabled> Eliezer: <code>browser_control</code> tool, await <code>tool_remote_exec_response</code> message by command ID</li>
+            <li><input type="checkbox" disabled> Navigate command (end-to-end round-trip)</li>
             <li><input type="checkbox" disabled> Click, fill, extract commands</li>
-            <li><input type="checkbox" disabled> Screenshot command (base64 → chat)</li>
+            <li><input type="checkbox" disabled> Screenshot command</li>
             <li><input type="checkbox" disabled> JavaScript execution command</li>
             <li><input type="checkbox" disabled> Tab management (new, list, switch)</li>
             <li><input type="checkbox" disabled> Vet extracted content through <code>vetContent()</code></li>
-            <li><input type="checkbox" disabled> Visual indicator (green border when controlled)</li>
-            <li><input type="checkbox" disabled> Disconnect button + session management</li>
-            <li><input type="checkbox" disabled> Site blacklist</li>
-            <li><input type="checkbox" disabled> Timeout handling (30s command timeout)</li>
-            <li><input type="checkbox" disabled> Add to TOC</li>
+            <li><input type="checkbox" disabled> Visual indicator on controlled tab</li>
+            <li><input type="checkbox" disabled> Site blacklist in extension</li>
+            <li><input type="checkbox" disabled> Timeout handling (30s)</li>
         </ul>
     </div>
 
