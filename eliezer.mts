@@ -15,13 +15,20 @@ import { Compactor } from './compaction.mts';
 import { redactSecrets } from './detect-secret.mts';
 import { FileSearchTool } from './tool-file-search.mts';
 import { CodebaseExplorerTool } from './tool-explore.mts';
+import { TaskManager, TaskTool, formatTaskTree } from './tasks.mts';
 
 config();
 
-function requireEnv(name: string): string {
-	const val = process.env[name];
-	if (!val) { console.error(`Missing required env var: ${name}`); process.exit(1); }
-	return val;
+function requireEnv(...names: string[]): string {
+	for (let i = 0; i < names.length; i++) {
+		const val = process.env[names[i]];
+		if (val) {
+			if (i > 0) console.warn(`env: ${names[0]} not set, using fallback ${names[i]}`);
+			return val;
+		}
+	}
+	console.error(`Missing required env var: ${names.join(' or ')}`);
+	process.exit(1);
 }
 
 const LLM_PROVIDER = requireEnv('LLM_PROVIDER');
@@ -49,22 +56,27 @@ const queue = new EventQueue(db);
 const memory = new Memory(db, USER_TZ);
 const llm = createLLM({ provider: LLM_PROVIDER, apiKey: LLM_API_KEY, model: LLM_MODEL, baseUrl: LLM_BASE_URL });
 const compactionLlm = createLLM({
-	provider: process.env.COMPACTION_LLM_PROVIDER || LLM_PROVIDER,
-	apiKey: process.env.COMPACTION_LLM_API_KEY || LLM_API_KEY,
-	model: process.env.COMPACTION_LLM_MODEL || LLM_MODEL,
-	baseUrl: process.env.COMPACTION_LLM_BASE_URL || LLM_BASE_URL,
+	provider: requireEnv('COMPACTION_LLM_PROVIDER', 'LLM_PROVIDER'),
+	apiKey: requireEnv('COMPACTION_LLM_API_KEY', 'LLM_API_KEY'),
+	model: requireEnv('COMPACTION_LLM_MODEL', 'LLM_MODEL'),
+	baseUrl: requireEnv('COMPACTION_LLM_BASE_URL', 'LLM_BASE_URL'),
 	timeoutMs: 240_000,
 	maxTokens: 25_000,
 });
 const chat = new ChatClient(CHAT_URL);
 const cronManager = new CronManager(db);
+const taskManager = new TaskManager(db);
 
 const CONTEXT_WINDOW = Number(requireEnv('CONTEXT_WINDOW'));
 
+const FLOW_LIMIT = parseDuration(requireEnv('COMPACTION_FLOW_INTERVAL', 'COMPACTION_FLOW_LIMIT'));
+if (!FLOW_LIMIT) { console.error('Invalid COMPACTION_FLOW_INTERVAL format (e.g. "1m", "30s")'); process.exit(1); }
+const GROUP_GAP = parseDuration(requireEnv('COMPACTION_GROUP_GAP_INTERVAL', 'COMPACTION_GROUP_GAP'));
+if (!GROUP_GAP) { console.error('Invalid COMPACTION_GROUP_GAP_INTERVAL format (e.g. "1m", "30s")'); process.exit(1); }
 const compactor = new Compactor(memory, compactionLlm, USER_TZ, {
 	tokenBudget: CONTEXT_WINDOW,
-	groupGapSeconds: parseDuration(process.env.COMPACTION_GROUP_GAP || '1m', 60),
-	flowLimitSeconds: parseDuration(process.env.COMPACTION_FLOW_LIMIT || '1m', 60),
+	groupGapSeconds: GROUP_GAP,
+	flowLimitSeconds: FLOW_LIMIT,
 	promptsDir: PROMPTS_DIR,
 });
 const searchProvider = new SearXNGProvider(SEARCH_URL);
@@ -74,6 +86,7 @@ const tools = [
 	new ChatTool(chat, CHAT_PUBLIC_DIR, db), new SearchHistoryTool(db),
 	new ScheduleTool(cronManager), new WebSearchTool(searchProvider, compactionLlm),
 	new FileSearchTool(), new CodebaseExplorerTool(llm),
+	new TaskTool(taskManager),
 ];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
@@ -93,6 +106,8 @@ function getSystem(): string {
 		);
 		parts.push(`# Scheduled Tasks\n${lines.join('\n')}`);
 	}
+	const taskTree = taskManager.tree();
+	if (taskTree.length) parts.push(`# Tasks\n${formatTaskTree(taskTree)}`);
 	const history = memory.getCompactedHistory();
 	if (history) parts.push(`# Conversation History\n${history}`);
 	return parts.filter(Boolean).join('\n\n');
@@ -140,6 +155,7 @@ startServer({
 	},
 	listCrons: () => cronManager.list(),
 	setCronEnabled: (name, enabled) => cronManager.setEnabled(name, enabled),
+	listTasks: () => taskManager.listAll(),
 	stop: () => {
 		if (!abortController) return false;
 		abortController.abort();
@@ -193,11 +209,13 @@ async function heartbeat() {
 	}
 }
 
+let lastEventDone = Math.floor(Date.now() / 1000);
+
 log.info('eliezer starting');
 
 if (existsSync(RESTART_FLAG_FILE)) {
 	unlinkSync(RESTART_FLAG_FILE);
-	queue.push('system', 'restart', { message: 'You just restarted' });
+	queue.push('system', 'restart', 'You just restarted');
 }
 
 while (true) {
@@ -211,6 +229,16 @@ while (true) {
 		queue.cancelWait();
 		currentEvent = null;
 		await heartbeat();
+		const pending = taskManager.pending();
+		const idleSec = Math.floor(Date.now() / 1000) - lastEventDone;
+		log.debug('continuation check', { pendingCount: String(pending.length), idleSec: String(idleSec), flowLimit: String(FLOW_LIMIT) });
+		if (pending.length && idleSec > FLOW_LIMIT) {
+			const next = pending[0];
+			taskManager.updateTask(next.id, { status: 'active' });
+			const nudge = `[continue work (when finished, use the task tool to mark it done). next: #${next.id} ${next.title}]`;
+			log.debug('nudge', { nudge });
+			queue.push('system', 'continue_work', nudge);
+		}
 		continue;
 	}
 
@@ -251,6 +279,7 @@ while (true) {
 		}
 	}
 	abortController = null;
+	lastEventDone = Math.floor(Date.now() / 1000);
 	setAgentState(STATE_IDLE);
 	queue.done(event.id);
 }
@@ -263,6 +292,9 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 
 	if (event.source === 'cron') {
 		memory.add('user', `[cron:${payload.name}] ${payload.prompt}`);
+	} else if (event.type === 'continue_work' || event.type === 'restart') {
+		memory.add('user', payload);
+		await chat.send('default', payload, 'thought').catch((e: any) => log.error('chat send event', { error: e.message }));
 	} else {
 		memory.add('user', `Event: ${event.source}:${event.type}\n${JSON.stringify(event.payload)}`, chatMessageId);
 	}
@@ -290,7 +322,8 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 				}
 			}
 			setAgentState(STATE_INFERENCE);
-			const response = await llm.call(memory.getContext(), getSystem(), toolDefs, signal);
+			const ctx = memory.getContext();
+			const response = await llm.call(ctx, getSystem(), toolDefs, signal);
 
 			// Keep text, tool_use, and reasoning blocks. Reasoning is needed for providers
 			// that require it on history replay (e.g. Kimi).

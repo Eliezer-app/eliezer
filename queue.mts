@@ -1,10 +1,21 @@
 import Database from 'better-sqlite3';
 
+export interface ChatMessagePayload {
+	conversationId: string;
+	messageId: string;
+	content: string;
+	attachment?: { filename: string; mimetype: string; size: number };
+}
+
 export interface AgentEvent {
 	id: number;
 	source: string;
 	type: string;
-	payload: unknown;
+	payload:
+		| string                              // continue_work, restart
+		| ChatMessagePayload                  // user_message
+		| { messageId: string }               // message_deleted, message_updated
+		| { name: string; prompt: string };   // cron scheduled
 	created_at: string;
 }
 
@@ -36,7 +47,7 @@ export class EventQueue {
 		`);
 	}
 
-	push(source: string, type: string, payload: unknown = {}): number {
+	push(source: string, type: string, payload: AgentEvent['payload']): number {
 		const result = this.db.prepare(
 			'INSERT INTO event_queue (source, type, payload) VALUES (?, ?, ?)'
 		).run(source, type, JSON.stringify(payload));

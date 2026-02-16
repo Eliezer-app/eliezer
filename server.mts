@@ -2,6 +2,7 @@ import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { EventQueue } from './queue.mts';
 import { Logger } from './log.mts';
 import { CronRow } from './cron.mts';
+import { GroupRow, TaskRow } from './tasks.mts';
 
 export interface ServerDeps {
 	port: number;
@@ -12,12 +13,13 @@ export interface ServerDeps {
 	getMemory: () => Record<string, unknown>;
 	listCrons: () => CronRow[];
 	setCronEnabled: (name: string, enabled: boolean) => boolean;
+	listTasks: () => { groups: GroupRow[]; tasks: TaskRow[] };
 	stop: () => boolean;
 	forget: (messageId: string) => number;
 }
 
 export function startServer(deps: ServerDeps) {
-	const { port, queue, log, getHealth, getState, getMemory, listCrons, setCronEnabled, stop, forget } = deps;
+	const { port, queue, log, getHealth, getState, getMemory, listCrons, setCronEnabled, listTasks, stop, forget } = deps;
 
 	const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
 		// GET /info/health — Liveness check. No DB queries.
@@ -81,6 +83,24 @@ export function startServer(deps: ServerDeps) {
 			} catch (e: any) {
 				json(res, 400, { ok: false, error: e.message });
 			}
+			return;
+		}
+
+		// GET /tasks — Task list (read-only, for chat settings panel).
+		//   groups[].id          number       — group ID
+		//   groups[].parent_id   number|null  — parent group ID
+		//   groups[].title       string       — group title
+		//   groups[].created_at  string       — creation timestamp
+		//   tasks[].id           number       — task ID
+		//   tasks[].group_id     number|null  — parent group ID
+		//   tasks[].title        string       — task title
+		//   tasks[].details      string       — description
+		//   tasks[].status       string       — pending | active | done
+		//   tasks[].priority     number       — global priority
+		//   tasks[].due_date     string|null  — ISO 8601 date or null
+		//   tasks[].created_at   string       — creation timestamp
+		if (req.method === 'GET' && req.url === '/tasks') {
+			json(res, 200, listTasks());
 			return;
 		}
 

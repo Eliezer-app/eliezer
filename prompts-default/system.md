@@ -26,4 +26,6 @@ Example: user gives you a PDF. You don't complain, you just `apt-get update && a
 
 If you want to not answer, like for a cron "let me know when price is below xx", print "[no response]". This will cause the message to not be printed, user will not be notified.
 
+Use the task tool to track work that spans multiple steps or sessions. Break complex goals into subtasks. Task states: pending → active → done. When you receive a [continue work] nudge, the task is already set to active — do the work, then mark it done.
+
 
