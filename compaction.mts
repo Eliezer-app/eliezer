@@ -1,53 +1,9 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { LLMBase } from './llm.mts';
 import { Logger } from './log.mts';
-import { Memory, MessageRow, Group, SummaryEntry, estimateTokens, formatTimestamp } from './memory.mts';
+import { Memory, MessageRow, Group, estimateTokens } from './memory.mts';
 
 const log = new Logger({ module: 'Compaction' });
-
-
-function compactionInstructions(messageCount: number): string {
-	const lo = Math.max(3, Math.round(messageCount / 20));
-	const hi = Math.max(lo + 2, Math.round(messageCount / 6));
-	return `
-
-CRITICAL: You MUST output ONLY a valid JSON array. No prose, no markdown, no explanation.
-
-Each entry summarizes a stretch of conversation. You decide the granularity.
-Group related exchanges into one summary when they share a topic. Split when the topic changes.
-
-{"entries": [
-  {"time":"2025-05-14T10:32","role":"agent","summary":"Read config.mts, edited DB init to add migration"},
-  {"time":"2025-05-14T10:37","role":"user","summary":"Corrected: use tabs not spaces. Prefers minimal diffs."},
-  ...
-]}
-
-- "time": timestamp of the LAST message covered (copy from input, truncate to minutes)
-- "role": "agent" or "user". Alternate roles
-- Chronological order, every input message must be covered
-- Be concise but preserve decisions, corrections, and intent
-- You are compressing ${messageCount} messages. Aim for ${lo}-${hi} entries
-
-Output ONLY the JSON array. Nothing else.`;
-}
-
-/**
- * Parse structured JSON output from compaction LLM.
- * Falls back to a single entry if parsing fails.
- */
-function parseSummaryEntries(text: string, fallbackTime: string): SummaryEntry[] {
-	try {
-		const clean = text.replace(/^```json?\s*\n?/m, '').replace(/\n?```\s*$/m, '');
-		let parsed = JSON.parse(clean);
-		// Unwrap {anySingleKey: [...]}
-		if (!Array.isArray(parsed) && typeof parsed === 'object' && parsed !== null) {
-			const keys = Object.keys(parsed);
-			if (keys.length === 1 && Array.isArray(parsed[keys[0]])) parsed = parsed[keys[0]];
-		}
-		if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-	} catch {}
-	return [{ time: fallbackTime, role: 'agent', summary: text }];
-}
 
 /**
  * Truncate message content for the summarization prompt.
@@ -56,67 +12,65 @@ function truncate(text: string, max: number): string {
 	return text.length > max ? text.slice(0, max) + '...' : text;
 }
 
-function formatForSummary(content: string, role: string, ts: string): Array<Record<string, string>> {
+function formatLine(content: string, role: string, ts: string): string[] {
+	const tag = role === 'user' ? 'User' : 'Agent';
 	try {
 		const blocks = JSON.parse(content);
 		if (Array.isArray(blocks)) {
-			const entries: Array<Record<string, string>> = [];
+			const lines: string[] = [];
 			for (const b of blocks) {
 				if (b.type === 'reasoning') continue;
-				if (b.type === 'text') entries.push({ role, time: ts, type: 'response', content: truncate(b.text, 2000) });
-				if (b.type === 'tool_use') entries.push({ role, time: ts, type: 'tool_call', tool: b.name, input: truncate(JSON.stringify(b.input), 500) });
-				if (b.type === 'tool_result') entries.push({ role, time: ts, type: 'tool_result', content: truncate(b.content || '', 500) });
+				if (b.type === 'text') lines.push(`[${ts}:${tag}:response] ${truncate(b.text, 2000)}`);
+				if (b.type === 'tool_use') lines.push(`[${ts}:${tag}:tool_call] ${b.name} ${truncate(JSON.stringify(b.input), 500)}`);
+				if (b.type === 'tool_result') lines.push(`[${ts}:${tag}:tool_result] ${truncate(b.content || '', 500)}`);
 			}
-			return entries;
+			return lines;
 		}
 	} catch {}
-	// Extract user message from event wrapper: "Event: chat:user_message\n{...\"content\":\"actual text\"}"
 	const eventMatch = content.match(/^Event: \S+\n(.+)$/s);
 	if (eventMatch) {
 		try {
 			const payload = JSON.parse(eventMatch[1]);
-			if (payload.content) return [{ role, time: ts, type: 'message', content: truncate(payload.content, 2000) }];
+			if (payload.content) return [`[${ts}:${tag}:message] ${truncate(payload.content, 2000)}`];
 		} catch {}
 	}
-	return [{ role, time: ts, type: 'message', content: truncate(content, 2000) }];
+	return [`[${ts}:${tag}:message] ${truncate(content, 2000)}`];
 }
 
 /**
  * Format messages for the compaction LLM.
  */
 function formatMessages(messages: MessageRow[]): string {
-	return JSON.stringify(messages.map(m => {
-		const ts = new Date(m.created_at * 1000).toISOString().slice(0, 19);
+	return messages.flatMap(m => {
+		const ts = new Date(m.created_at * 1000).toISOString().slice(0, 16);
 		const role = m.role === 'assistant' ? 'agent' : 'user';
-		return formatForSummary(m.content, role, ts);
-	}).flat(), null, 2);
+		return formatLine(m.content, role, ts);
+	}).join('\n');
 }
 
 /**
  * Build compaction system prompt from user-editable file only.
  */
-function buildCompactionSystemPrompt(promptsDir: string, priorContext?: string): string {
-	let system = readFileSync(`${promptsDir}/compaction.md`, 'utf-8').trim();
+function buildCompactionPrompts(promptsDir: string, priorContext?: string): { system: string; preamble: string } {
+	const preamble = readFileSync(`${promptsDir}/compaction.md`, 'utf-8').trim();
+	let system = 'You are a Context Compaction expert. Your best quality is preserving information.';
 	if (priorContext) system += `\n\n# Previous context (for reference only — compress only the messages below, not this context)\n${priorContext}`;
-	return system;
+	return { system, preamble };
 }
 
 /**
- * Call compaction LLM and parse structured entries.
- * Format instructions go in the user message (not system) so models like Kimi K2.5 can't ignore them.
+ * Call compaction LLM and return raw narrative summary.
  */
-async function callCompactionLLM(messages: MessageRow[], llm: LLMBase, promptsDir: string, timezone: string, priorContext?: string): Promise<SummaryEntry[]> {
+export async function callCompactionLLM(messages: MessageRow[], llm: LLMBase, promptsDir: string, priorContext?: string): Promise<string> {
 	const formatted = formatMessages(messages);
-	const system = buildCompactionSystemPrompt(promptsDir, priorContext);
-	const userContent = formatted + '\n\n' + compactionInstructions(messages.length);
+	const { system, preamble } = buildCompactionPrompts(promptsDir, priorContext);
+	const userContent = preamble + '\n\nCONVERSATION TO CURATE, BEGIN:\n\n' + formatted + '\n\nEND OF CONVERSATION';
 	log.debug('calling LLM', { messages: String(messages.length), chars: String(userContent.length) });
-	const response = await llm.call([{ role: 'user', content: userContent }], system, [], undefined, true);
-	const text = response.content
+	const response = await llm.call([{ role: 'user', content: userContent }], system);
+	return response.content
 		.filter(b => b.type === 'text')
 		.map(b => (b as Extract<typeof b, { type: 'text' }>).text)
 		.join('\n');
-	const fallbackTime = formatTimestamp(messages[messages.length - 1].created_at, timezone);
-	return parseSummaryEntries(text, fallbackTime);
 }
 
 /**
@@ -191,22 +145,22 @@ export const BATCH_CHARS = 400_000;
 /**
  * Compress a single group: emergency compaction with prior context.
  */
-export async function compressGroup(memory: Memory, group: Group, llm: LLMBase, promptsDir: string, timezone: string, priorContext?: string): Promise<CompactionResult> {
-	const tokensBefore = group.messages.reduce((sum, m) => sum + estimateTokens(m.content), 0);
-	const entries = await callCompactionLLM(group.messages, llm, promptsDir, timezone, priorContext);
-	const tokensAfter = entries.reduce((sum, e) => sum + estimateTokens(e.summary), 0);
+export async function compressGroup(memory: Memory, group: Group, llm: LLMBase, promptsDir: string, reason: string, tokenBudget: number, priorContext?: string): Promise<CompactionResult> {
+	const tokensBefore = group.messages.reduce((sum, m) => sum + memory.messageTokens(m), 0);
+	const summary = await callCompactionLLM(group.messages, llm, promptsDir, priorContext);
+	const tokensAfter = estimateTokens(summary);
 
-	const anchors = memory.writeCompacted(group.messages, entries);
-	memory.logCompaction('compress', group.start, group.end, tokensBefore, tokensAfter);
+	memory.writeCompacted(group.messages, summary);
+	memory.logCompaction('compress', group.start, group.end, tokensBefore, tokensAfter, reason, tokenBudget);
 
-	return { tokensBefore, tokensAfter, groups: 1, messages: group.messages.length, anchors };
+	return { tokensBefore, tokensAfter, groups: 1, messages: group.messages.length, anchors: 1 };
 }
 
 /**
  * Compress multiple groups, batched by total content size.
  * Cuts at group boundaries so no group is split.
  */
-export async function compressGroups(memory: Memory, groups: Group[], llm: LLMBase, promptsDir: string, timezone: string): Promise<CompactionResult> {
+export async function compressGroups(memory: Memory, groups: Group[], llm: LLMBase, promptsDir: string, reason: string, tokenBudget: number): Promise<CompactionResult> {
 	const batches: Group[][] = [];
 	let current: Group[] = [];
 	let chars = 0;
@@ -223,35 +177,32 @@ export async function compressGroups(memory: Memory, groups: Group[], llm: LLMBa
 	if (current.length) batches.push(current);
 
 	log.debug('compressing', { batches: String(batches.length), groups: String(groups.length) });
-	let totalTokensBefore = 0, totalTokensAfter = 0, totalAnchors = 0, totalMessages = 0;
+	let totalTokensBefore = 0, totalTokensAfter = 0, totalMessages = 0;
 	for (let i = 0; i < batches.length; i++) {
 		const batch = batches[i];
 		const msgs = batch.flatMap(g => g.messages);
-		const tokensBefore = msgs.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+		const tokensBefore = msgs.reduce((sum, m) => sum + memory.messageTokens(m), 0);
 		log.debug('batch', { batch: `${i + 1}/${batches.length}`, messages: String(msgs.length), tokens: String(tokensBefore) });
-		const entries = await callCompactionLLM(msgs, llm, promptsDir, timezone);
-		const tokensAfter = entries.reduce((sum, e) => sum + estimateTokens(e.summary), 0);
-		const anchors = memory.writeCompacted(msgs, entries);
-		memory.logCompaction('compress', batch[0].start, batch[batch.length - 1].end, tokensBefore, tokensAfter);
+		const summary = await callCompactionLLM(msgs, llm, promptsDir);
+		const tokensAfter = estimateTokens(summary);
+		memory.writeCompacted(msgs, summary);
+		memory.logCompaction('compress', batch[0].start, batch[batch.length - 1].end, tokensBefore, tokensAfter, reason, tokenBudget);
 		totalTokensBefore += tokensBefore;
 		totalTokensAfter += tokensAfter;
-		totalAnchors += anchors;
 		totalMessages += msgs.length;
 	}
 
-	return { tokensBefore: totalTokensBefore, tokensAfter: totalTokensAfter, groups: groups.length, messages: totalMessages, anchors: totalAnchors };
+	return { tokensBefore: totalTokensBefore, tokensAfter: totalTokensAfter, groups: groups.length, messages: totalMessages, anchors: batches.length };
 }
 
 export class Compactor {
 	private memory: Memory;
 	private llm: LLMBase;
-	private timezone: string;
 	private config: CompactorConfig;
 
-	constructor(memory: Memory, llm: LLMBase, timezone: string, config: CompactorConfig) {
+	constructor(memory: Memory, llm: LLMBase, config: CompactorConfig) {
 		this.memory = memory;
 		this.llm = llm;
-		this.timezone = timezone;
 		this.config = config;
 	}
 
@@ -267,10 +218,11 @@ export class Compactor {
 	/** Emergency compaction: compress oldest group, retrying up to 3 times on failure. */
 	async compactTail(plan: CompactionPlan): Promise<CompactionResult | null> {
 		const { group, priorContext } = plan as CompactionPlanInternal;
+		const reason = `emergency, ${group.messages.length} messages`;
 		let retries = 3;
 		while (retries > 0) {
 			try {
-				return await compressGroup(this.memory, group, this.llm, this.config.promptsDir, this.timezone, priorContext);
+				return await compressGroup(this.memory, group, this.llm, this.config.promptsDir, reason, this.config.tokenBudget, priorContext);
 			} catch (e: any) {
 				retries--;
 				log.error('emergency compaction failed', { error: e.message, retriesLeft: String(retries) });
@@ -303,14 +255,14 @@ export class Compactor {
 		let flowTokens = 0;
 		let cutoff = groups.length;
 		for (let i = groups.length - 1; i >= 0; i--) {
-			const groupTokens = groups[i].messages.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+			const groupTokens = groups[i].messages.reduce((sum, m) => sum + this.memory.messageTokens(m), 0);
 			if (flowTokens + groupTokens > FLOW_ZONE_TOKENS) break;
 			flowTokens += groupTokens;
 			cutoff = i;
 		}
 		if (cutoff === 0) { log.debug('compact skip: all groups within flow budget'); return null; }
 		const eligible = groups.slice(0, cutoff);
-		const eligibleTokens = eligible.reduce((sum, g) => sum + g.messages.reduce((s, m) => s + estimateTokens(m.content), 0), 0);
+		const eligibleTokens = eligible.reduce((sum, g) => sum + g.messages.reduce((s, m) => s + this.memory.messageTokens(m), 0), 0);
 		if (eligibleTokens < COMPACT_MIN_TOKENS) { log.debug('compact skip: eligible tokens under threshold', { tokens: String(eligibleTokens), threshold: String(Math.floor(COMPACT_MIN_TOKENS)) }); return null; }
 		const batch: typeof eligible = [];
 		let chars = 0;
@@ -321,7 +273,9 @@ export class Compactor {
 			chars += groupChars;
 		}
 
-		return compressGroups(this.memory, batch, this.llm, promptsDir, this.timezone);
+		const batchMessages = batch.reduce((sum, g) => sum + g.messages.length, 0);
+		const reason = `idle, ${batch.length} groups, ${batchMessages} messages`;
+		return compressGroups(this.memory, batch, this.llm, promptsDir, reason, tokenBudget);
 	}
 
 	/** Distill oldest compacted summaries into memory.md. */
@@ -340,7 +294,7 @@ export class Compactor {
 		await distillToMemory(this.llm, `${promptsDir}/memory.md`, toDistill.map(r => r.summary));
 
 		const archived = this.memory.archiveCompacted(cutoffId);
-		this.memory.logCompaction('distill', toDistill[0].id, cutoffId, compactedTokens, 0);
+		this.memory.logCompaction('distill', toDistill[0].id, cutoffId, compactedTokens, 0, `${toDistill.length} summaries`, tokenBudget);
 
 		return { distilled: toDistill.length, archived };
 	}

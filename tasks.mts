@@ -24,6 +24,8 @@ export interface TreeNode {
 	id: number;
 	title: string;
 	status?: string;
+	details?: string;
+	priority?: number;
 	due_date?: string | null;
 	children: TreeNode[];
 }
@@ -129,7 +131,7 @@ export class TaskManager {
 		}
 
 		for (const t of tasks) {
-			const node: TreeNode = { kind: 'task', id: t.id, title: t.title, status: t.status, due_date: t.due_date, children: [] };
+			const node: TreeNode = { kind: 'task', id: t.id, title: t.title, status: t.status, details: t.details, priority: t.priority, due_date: t.due_date, children: [] };
 			if (t.group_id && groupNodes.has(t.group_id)) {
 				groupNodes.get(t.group_id)!.children.push(node);
 			} else {
@@ -159,9 +161,34 @@ export function formatTaskTree(tree: TreeNode[]): string {
 	return formatTree(tree);
 }
 
+function formatYaml(nodes: TreeNode[], indent = ''): string {
+	const lines: string[] = [];
+	for (const node of nodes) {
+		if (node.kind === 'group') {
+			lines.push(`${indent}- group: g${node.id} ${node.title}`);
+			if (node.children.length) {
+				lines.push(`${indent}  tasks:`);
+				lines.push(formatYaml(node.children, indent + '  '));
+			}
+		} else {
+			lines.push(`${indent}- id: ${node.id}`);
+			lines.push(`${indent}  title: ${node.title}`);
+			lines.push(`${indent}  status: ${node.status}`);
+			if (node.details) lines.push(`${indent}  details: ${node.details}`);
+			if (node.priority) lines.push(`${indent}  priority: ${node.priority}`);
+			if (node.due_date) lines.push(`${indent}  due: ${node.due_date}`);
+		}
+	}
+	return lines.join('\n');
+}
+
+export function formatTaskYaml(tree: TreeNode[]): string {
+	return formatYaml(tree);
+}
+
 export class TaskTool extends ToolBase {
 	name = 'task';
-	description = 'Manage tasks and groups. Groups are containers (create_group, delete_group). Tasks are actionable work (create, update, complete, delete). list shows all.';
+	description = 'Manage tasks and groups. Groups are containers (create_group, delete_group). Tasks are actionable work (create, update, complete, delete). list shows all. States: pending → active → done. Paused tasks don\'t trigger continuation. All pending/active tasks will keep notifying the agent to continue work until done or paused.';
 	input_schema = {
 		type: 'object',
 		properties: {
@@ -173,7 +200,7 @@ export class TaskTool extends ToolBase {
 			parent_id: { type: 'number', description: 'Parent group ID (for create_group nesting)' },
 			priority: { type: 'number', description: 'Global priority (lower = higher, default 0)' },
 			due_date: { type: 'string', description: 'Due date (ISO 8601)' },
-			status: { type: 'string', enum: ['pending', 'active', 'done'], description: 'Task status (for update)' },
+			status: { type: 'string', enum: ['pending', 'active', 'paused', 'done'], description: 'Task status (for update)' },
 		},
 		required: ['action'],
 	};

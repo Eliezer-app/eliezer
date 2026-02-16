@@ -95,7 +95,7 @@ export function startServer(deps: ServerDeps) {
 		//   tasks[].group_id     number|null  — parent group ID
 		//   tasks[].title        string       — task title
 		//   tasks[].details      string       — description
-		//   tasks[].status       string       — pending | active | done
+		//   tasks[].status       string       — pending | active | paused | done
 		//   tasks[].priority     number       — global priority
 		//   tasks[].due_date     string|null  — ISO 8601 date or null
 		//   tasks[].created_at   string       — creation timestamp

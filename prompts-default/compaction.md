@@ -76,18 +76,18 @@ Be precise who's thought or action you note, agent or user.
 
 **Ouptut format:**
 
-[:timestamp] :user-action-or-quote
-[:timestamp] :agent-action-or-answer
-[:timestamp] :user-reaction <- this one is always IMPORTANT
+[<timestamp>] <user-action-or-quote>
+[<timestamp>] <agent-action-or-answer>
+[<timestamp>] <user-reaction> <- this one is always IMPORTANT
 ...
 
 ## File changes
-:file-path - :summary-of-change :reason-of-change
+<file-path> - <summary-of-change> <reason-of-change>
 ...
 
 ## Notes
-  ### :section
-    - :important-fact
+  ### <section>
+    - <important-fact>
     ...
   ...
 

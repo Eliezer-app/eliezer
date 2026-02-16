@@ -17,18 +17,13 @@ export interface MessageRow {
 	content: string;
 	created_at: number;
 	archived: number;
+	tokens: number | null;
 }
 
 export interface Group {
 	start: number; // first rowid
 	end: number;   // last rowid
 	messages: MessageRow[];
-}
-
-export interface SummaryEntry {
-	time: string;
-	role: string;
-	summary: string;
 }
 
 // --- Pure utilities ---
@@ -63,14 +58,6 @@ export function formatTimestamp(epoch: number, timezone: string): string {
 	return `${local}${sign}${oh}:${om}`;
 }
 
-/**
- * Parse a timestamp from LLM output into epoch seconds.
- */
-export function parseTimestamp(timeStr: string): number {
-	const hasOffset = /[+-]\d{2}:\d{2}$/.test(timeStr) || timeStr.endsWith('Z');
-	return Math.floor(new Date(hasOffset ? timeStr : timeStr + 'Z').getTime() / 1000);
-}
-
 // --- Grouping helper ---
 
 function hasToolResult(content: string): boolean {
@@ -81,7 +68,7 @@ function hasToolResult(content: string): boolean {
 	return false;
 }
 
-function groupRows(rows: MessageRow[], gapSeconds: number): Group[] {
+export function groupRows(rows: MessageRow[], gapSeconds: number): Group[] {
 	if (!rows.length) return [];
 
 	const groups: Group[] = [];
@@ -158,9 +145,21 @@ export class Memory {
 				group_end INTEGER,
 				tokens_before INTEGER,
 				tokens_after INTEGER,
+				reason TEXT NOT NULL DEFAULT '',
 				created_at TEXT DEFAULT (datetime('now'))
 			);
 		`);
+		// Migration: add tokens column to messages (lazy — computed on demand)
+		const msgCols = db.pragma('table_info(messages)') as Array<{ name: string }>;
+		if (!msgCols.some(c => c.name === 'tokens')) {
+			db.exec("ALTER TABLE messages ADD COLUMN tokens INTEGER");
+		}
+
+		// Migration: add reason column
+		const logCols = db.pragma('table_info(compaction_log)') as Array<{ name: string }>;
+		if (!logCols.some(c => c.name === 'reason')) {
+			db.exec("ALTER TABLE compaction_log ADD COLUMN reason TEXT NOT NULL DEFAULT ''");
+		}
 	}
 
 	add(role: 'user' | 'assistant', content: string | ContentBlock[], chatMessageId?: string): void {
@@ -187,20 +186,38 @@ export class Memory {
 
 	// --- Compaction DB operations ---
 
-	/** Total tokens in unarchived messages. */
-	tokenUsage(): number {
-		const rows = this.db.prepare(
-			'SELECT content FROM messages WHERE NOT archived'
-		).all() as Array<{ content: string }>;
-		return rows.reduce((sum, r) => sum + estimateTokens(r.content), 0);
+	/** Get token count for a message, computing and persisting if needed. */
+	messageTokens(m: MessageRow): number {
+		if (m.tokens != null) return m.tokens;
+		m.tokens = estimateTokens(m.content);
+		this.db.prepare('UPDATE messages SET tokens = ? WHERE rowid = ?').run(m.tokens, m.rowid);
+		return m.tokens;
 	}
 
-	/** Identify groups of unarchived messages by time gaps. */
-	identifyGroups(gapSeconds: number, includeArchived = false): Group[] {
+	/** Total tokens in unarchived messages. */
+	tokenUsage(): number {
+		const uncached = this.db.prepare(
+			'SELECT rowid, content FROM messages WHERE NOT archived AND tokens IS NULL'
+		).all() as Array<{ rowid: number; content: string }>;
+		if (uncached.length) {
+			const update = this.db.prepare('UPDATE messages SET tokens = ? WHERE rowid = ?');
+			this.db.transaction(() => { for (const r of uncached) update.run(estimateTokens(r.content), r.rowid); })();
+		}
+		return (this.db.prepare(
+			'SELECT coalesce(sum(tokens), 0) as total FROM messages WHERE NOT archived'
+		).get() as { total: number }).total;
+	}
+
+	// TODO: fromRowid/toRowid are interpolated into SQL — parameterize when adding user-facing callers
+	/** Identify groups of messages by time gaps. */
+	identifyGroups(gapSeconds: number, opts?: { includeArchived?: boolean; fromRowid?: number; toRowid?: number }): Group[] {
+		const { includeArchived = false, fromRowid, toRowid } = opts ?? {};
+		const conditions = includeArchived ? [] : ['NOT archived'];
+		if (fromRowid != null) conditions.push(`rowid >= ${fromRowid}`);
+		if (toRowid != null) conditions.push(`rowid <= ${toRowid}`);
+		const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 		const rows = this.db.prepare(
-			includeArchived
-				? 'SELECT rowid, chat_message_id, role, content, created_at, archived FROM messages ORDER BY rowid'
-				: 'SELECT rowid, chat_message_id, role, content, created_at, archived FROM messages WHERE NOT archived ORDER BY rowid'
+			`SELECT rowid, chat_message_id, role, content, created_at, archived, tokens FROM messages ${where} ORDER BY rowid`
 		).all() as MessageRow[];
 		return groupRows(rows, gapSeconds);
 	}
@@ -211,10 +228,10 @@ export class Memory {
 	}
 
 	/** Get all non-archived compacted summaries. */
-	getCompactedSummaries(): Array<{ role: string; summary: string; created_at: number }> {
+	getCompactedSummaries(): Array<{ summary: string; created_at: number }> {
 		return this.db.prepare(
-			'SELECT role, summary, created_at FROM compacted WHERE NOT archived ORDER BY id'
-		).all() as Array<{ role: string; summary: string; created_at: number }>;
+			'SELECT summary, created_at FROM compacted WHERE NOT archived ORDER BY id'
+		).all() as Array<{ summary: string; created_at: number }>;
 	}
 
 	/** Get non-archived compacted rows with IDs (for distillation). */
@@ -224,23 +241,19 @@ export class Memory {
 		).all() as Array<{ id: number; summary: string }>;
 	}
 
-	/** Write compaction results: INSERT summaries into compacted table, archive source messages. */
-	writeCompacted(messages: MessageRow[], entries: SummaryEntry[]): number {
+	/** Write compaction results: INSERT summary into compacted table, archive source messages. */
+	writeCompacted(messages: MessageRow[], summary: string): void {
+		const lastTs = messages[messages.length - 1].created_at;
 		const tx = this.db.transaction(() => {
-			const insertStmt = this.db.prepare(
+			this.db.prepare(
 				'INSERT INTO compacted (role, summary, created_at) VALUES (?, ?, ?)'
-			);
-			for (const e of entries) {
-				const role = e.role === 'user' ? 'user' : 'assistant';
-				insertStmt.run(role, e.summary, parseTimestamp(e.time));
-			}
+			).run('assistant', summary, lastTs);
 			this.db.prepare(
 				'UPDATE messages SET archived = 1 WHERE rowid BETWEEN ? AND ?'
 			).run(messages[0].rowid, messages[messages.length - 1].rowid);
 		});
 		tx();
-		log.debug('wrote compacted', { entries: String(entries.length), archived: String(messages.length) });
-		return entries.length;
+		log.debug('wrote compacted', { chars: String(summary.length), archived: String(messages.length) });
 	}
 
 	/** Archive compacted rows up to cutoffId. Returns count archived. */
@@ -251,10 +264,12 @@ export class Memory {
 	}
 
 	/** Log a compaction operation. */
-	logCompaction(op: string, groupStart: number, groupEnd: number, tokensBefore: number, tokensAfter: number): void {
+	logCompaction(op: string, groupStart: number, groupEnd: number, tokensBefore: number, tokensAfter: number, reason: string, tokenBudget: number): void {
+		const pct = Math.round(tokensBefore / tokenBudget * 100);
+		const full = `${reason}, ${tokensBefore} -> ${tokensAfter} tokens (${pct}% of ${Math.round(tokenBudget / 1000)}k)`;
 		this.db.prepare(
-			'INSERT INTO compaction_log (op, group_start, group_end, tokens_before, tokens_after) VALUES (?, ?, ?, ?, ?)'
-		).run(op, groupStart, groupEnd, tokensBefore, tokensAfter);
+			'INSERT INTO compaction_log (op, group_start, group_end, tokens_before, tokens_after, reason) VALUES (?, ?, ?, ?, ?, ?)'
+		).run(op, groupStart, groupEnd, tokensBefore, tokensAfter, full);
 	}
 
 	/** Build prior context for compaction LLM (memory.md + compacted history). */
@@ -264,7 +279,7 @@ export class Memory {
 		try { mem = readFileSync(`${promptsDir}/memory.md`, 'utf-8').trim(); } catch {}
 		if (mem) parts.push(`## Memory\n${mem}`);
 		const rows = this.getCompactedSummaries();
-		if (rows.length) parts.push(`## Compacted history\n${rows.map(s => `[${s.role}] ${s.summary}`).join('\n\n')}`);
+		if (rows.length) parts.push(`## Compacted history\n${rows.map(s => s.summary).join('\n\n')}`);
 		return parts.length ? parts.join('\n\n') : undefined;
 	}
 
@@ -274,11 +289,7 @@ export class Memory {
 	getCompactedHistory(): string {
 		const compacted = this.getCompactedSummaries();
 		if (!compacted.length) return '';
-		const fmt = (epoch: number) => formatTimestamp(epoch, this.timezone);
-		const roleLabel = (role: string) => role === 'user' ? 'User' : 'Agent';
-		return compacted.map(({ role, summary, created_at }) =>
-			`[:${fmt(created_at)}] ${roleLabel(role)}: ${summary}`
-		).join('\n\n');
+		return compacted.map(c => c.summary).join('\n\n');
 	}
 
 	getContext(): Message[] {
@@ -367,12 +378,9 @@ export class Memory {
 
 	getMemoryStats(memoryPath: string, tokenBudget: number, systemText: string, memoryText: string) {
 		const flow = this.db.prepare(
-			'SELECT count(*) as count FROM messages WHERE NOT archived'
-		).get() as { count: number };
-		const flowContent = this.db.prepare(
-			'SELECT content FROM messages WHERE NOT archived'
-		).all() as Array<{ content: string }>;
-		const flowTokens = flowContent.reduce((sum, r) => sum + estimateTokens(r.content), 0);
+			'SELECT count(*) as count, coalesce(sum(tokens), 0) as tokens FROM messages WHERE NOT archived'
+		).get() as { count: number; tokens: number };
+		const flowTokens = flow.tokens;
 
 		const compacted = this.db.prepare(
 			'SELECT count(*) as count FROM compacted WHERE NOT archived'

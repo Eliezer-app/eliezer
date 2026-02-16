@@ -15,7 +15,8 @@ import { Compactor } from './compaction.mts';
 import { redactSecrets } from './detect-secret.mts';
 import { FileSearchTool } from './tool-file-search.mts';
 import { CodebaseExplorerTool } from './tool-explore.mts';
-import { TaskManager, TaskTool, formatTaskTree } from './tasks.mts';
+import { TaskManager, TaskTool } from './tasks.mts';
+import { buildSystemPrompt } from './system-prompt.mts';
 
 config();
 
@@ -73,7 +74,7 @@ const FLOW_LIMIT = parseDuration(requireEnv('COMPACTION_FLOW_INTERVAL', 'COMPACT
 if (!FLOW_LIMIT) { console.error('Invalid COMPACTION_FLOW_INTERVAL format (e.g. "1m", "30s")'); process.exit(1); }
 const GROUP_GAP = parseDuration(requireEnv('COMPACTION_GROUP_GAP_INTERVAL', 'COMPACTION_GROUP_GAP'));
 if (!GROUP_GAP) { console.error('Invalid COMPACTION_GROUP_GAP_INTERVAL format (e.g. "1m", "30s")'); process.exit(1); }
-const compactor = new Compactor(memory, compactionLlm, USER_TZ, {
+const compactor = new Compactor(memory, compactionLlm, {
 	tokenBudget: CONTEXT_WINDOW,
 	groupGapSeconds: GROUP_GAP,
 	flowLimitSeconds: FLOW_LIMIT,
@@ -90,27 +91,13 @@ const tools = [
 ];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
+function getSystem(): string {
+	return buildSystemPrompt({ promptsDir: PROMPTS_DIR, cronManager, taskManager, memory });
+}
+
 function readPrompt(name: string): string {
 	try { return readFileSync(`${PROMPTS_DIR}/${name}`, 'utf-8').trim(); }
 	catch { return ''; }
-}
-
-function getSystem(): string {
-	const parts = [readPrompt('system.md'), readPrompt('user.md'), readPrompt('widgets.md')];
-	const mem = readPrompt('memory.md');
-	if (mem) parts.push(`# Memory\n${mem}`);
-	const crons = cronManager.list();
-	if (crons.length) {
-		const lines = crons.map(c =>
-			`- ${c.name}: "${c.prompt}" (${c.cronHuman}${c.enabled ? '' : ', disabled'})`
-		);
-		parts.push(`# Scheduled Tasks\n${lines.join('\n')}`);
-	}
-	const taskTree = taskManager.tree();
-	if (taskTree.length) parts.push(`# Tasks\n${formatTaskTree(taskTree)}`);
-	const history = memory.getCompactedHistory();
-	if (history) parts.push(`# Conversation History\n${history}`);
-	return parts.filter(Boolean).join('\n\n');
 }
 
 const startTime = Date.now();
