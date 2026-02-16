@@ -18,7 +18,6 @@ services:
     volumes:
       - .:/opt/eliezer
       - ../clawchat:/opt/clawchat
-      - ..:/home/projects
       - node_modules:/opt/eliezer/node_modules
     command: sh -c 'npx tsx eliezer.mts 2>&1 | stdbuf -oL tee -a /opt/eliezer/state/eliezer.log'
     env_file:
