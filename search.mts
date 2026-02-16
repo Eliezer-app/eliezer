@@ -24,6 +24,8 @@ export class SearXNGProvider implements SearchProvider {
 		const url = `${this.baseUrl}/search?q=${encodeURIComponent(query)}&format=json&categories=general`;
 		const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
 		if (!res.ok) throw new Error(`SearXNG error: ${res.status} ${res.statusText}`);
+		const ct = res.headers.get('content-type') || '';
+		if (!ct.includes('application/json')) throw new Error(`SearXNG returned non-JSON response (${ct})`);
 		const data = await res.json() as any;
 		const results: SearchResult[] = (data.results ?? []).slice(0, limit).map((r: any) => ({
 			title: String(r.title ?? '').slice(0, 200),
