@@ -8,6 +8,7 @@ import { Memory } from './memory.mts';
 import { startServer } from './server.mts';
 import { ExecTool, ReadTool, WriteTool, EditTool, WgetTool, RestartTool, ScheduleTool, WebSearchTool, parseDuration } from './tools.mts';
 import { SearchHistoryTool } from './tool-search-history.mts';
+import { ReadWebpageTool } from './tool-read-webpage.mts';
 import { SearXNGProvider } from './search.mts';
 import { CronManager } from './cron.mts';
 import { ChatClient, ChatTool } from './chat.mts';
@@ -88,6 +89,7 @@ const tools = [
 	new ScheduleTool(cronManager), new WebSearchTool(searchProvider, compactionLlm),
 	new FileSearchTool(), new CodebaseExplorerTool(llm),
 	new TaskTool(taskManager),
+	new ReadWebpageTool(),
 ];
 const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 
