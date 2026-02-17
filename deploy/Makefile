@@ -46,10 +46,10 @@ configure:
 	@test -f $(APP_DIR)/.env || (echo "Create $(APP_DIR)/.env with your API keys and config, then rerun make setup."; exit 1)
 
 install-searxng:
-	mkdir -p /opt/searxng
-	cp $(APP_DIR)/config/searxng/settings.yml /opt/searxng/settings.yml
-	docker pull searxng/searxng
-	docker rm -f searxng 2>/dev/null || true
+	mkdir -p /opt/searxng && \
+	cp $(APP_DIR)/config/searxng/settings.yml /opt/searxng/settings.yml && \
+	docker pull searxng/searxng && \
+	(docker rm -f searxng 2>/dev/null || true) && \
 	docker run -d --name searxng --restart unless-stopped \
 		-p 127.0.0.1:8080:8080 \
 		-e SEARXNG_BASE_URL=http://localhost:8080 \
