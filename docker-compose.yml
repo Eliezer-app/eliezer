@@ -19,7 +19,7 @@ services:
       - .:/opt/eliezer
       - ../clawchat:/opt/clawchat
       - node_modules:/opt/eliezer/node_modules
-    command: sh -c 'npx tsx eliezer.mts 2>&1 | stdbuf -oL tee -a /opt/eliezer/state/eliezer.log'
+    command: sh -c 'apt-get update -qq && apt-get install -y -qq libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libasound2 libpangocairo-1.0-0 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxshmfence1 libnss3 libnspr4 >/dev/null 2>&1 && npx tsx eliezer.mts 2>&1 | stdbuf -oL tee -a /opt/eliezer/state/eliezer.log'
     env_file:
       - .env
     environment:

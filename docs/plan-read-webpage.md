@@ -1,5 +1,9 @@
 # Plan: Read Page Tool (Playwright)
 
+## Current state
+
+A quick prototype (`tool-read-webpage.mts`) is deployed using Puppeteer. It works but is missing vetting, fencing, shared browser instance, and uses Puppeteer instead of Playwright. Good enough to get us going — this plan covers the hardened version.
+
 ## Problem
 
 The agent can search the web (web_search → snippets) and download files (wget_tool), but can't read rendered web pages. Modern sites are SPAs with JS-rendered content — raw HTML from wget is often useless. The agent needs to read a URL and get clean text.

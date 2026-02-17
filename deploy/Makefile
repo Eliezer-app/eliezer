@@ -9,7 +9,10 @@ setup: install-deps install-swap install-app configure install-searxng enable
 install-deps:
 	# Node.js 22 via nodesource
 	curl -fsSL https://deb.nodesource.com/setup_$(NODE_VERSION).x | bash -
-	apt-get install -y nodejs build-essential sqlite3 bash-completion
+	apt-get install -y nodejs build-essential sqlite3 bash-completion \
+		libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libasound2 \
+		libpangocairo-1.0-0 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+		libxkbcommon0 libxshmfence1 libnss3 libnspr4
 	# Docker (for SearXNG)
 	which docker || (curl -fsSL https://get.docker.com | sh)
 
