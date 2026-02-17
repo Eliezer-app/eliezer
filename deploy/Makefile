@@ -12,7 +12,7 @@ install-deps:
 	apt-get install -y nodejs build-essential sqlite3 bash-completion \
 		libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libasound2t64 \
 		libpangocairo-1.0-0 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
-		libxkbcommon0 libxshmfence1 libnss3 libnspr4
+		libxkbcommon0 libxshmfence1 libnss3 libnspr4 libxfixes3 libxext6 libx11-6
 	# Docker (for SearXNG)
 	which docker || (curl -fsSL https://get.docker.com | sh)
 
