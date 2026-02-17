@@ -4,7 +4,13 @@ NODE_VERSION := 22
 .PHONY: setup deploy ssh-key install-deps install-swap install-app configure install-searxng enable status logs
 
 # Full setup: deps → swap → app → pause for .env → searxng → systemd
-setup: install-deps install-swap install-app configure install-searxng enable
+setup:
+	$(MAKE) install-deps
+	$(MAKE) install-swap
+	$(MAKE) install-app
+	$(MAKE) configure
+	$(MAKE) install-searxng
+	$(MAKE) enable
 
 install-deps:
 	# Node.js 22 via nodesource
