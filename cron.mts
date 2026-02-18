@@ -103,7 +103,7 @@ export class CronManager {
 				continue;
 			}
 
-			const interval = CronExpressionParser.parse(row.cron, { currentDate: now });
+			const interval = CronExpressionParser.parse(row.cron, { currentDate: now, tz: process.env.USER_TZ });
 			const prev = interval.prev().toDate();
 			const baseline = new Date((row.last_run ?? row.created_at) + 'Z');
 
