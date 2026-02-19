@@ -3,8 +3,9 @@
 dev: test-down
 	@test -d prompts || (mkdir -p prompts && cp -rn prompts-default/* prompts/)
 	rm -f state/eliezer.log
-	docker compose up -d init searxng
-	docker compose up -d --force-recreate --no-deps eliezer
+	docker compose up -d --build init searxng
+	docker compose wait init 2>/dev/null || true
+	docker compose up -d --build --force-recreate --no-deps eliezer
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \
 		if curl -sf http://localhost:3200/info/health >/dev/null 2>&1; then \
 			echo "eliezer is healthy"; exit 0; \
