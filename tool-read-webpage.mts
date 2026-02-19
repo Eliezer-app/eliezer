@@ -15,13 +15,15 @@ export class ReadWebpageTool extends ToolBase {
 	};
 
 	async call({ url, selector, wait_for, timeout }: Record<string, any>, signal?: AbortSignal): Promise<ToolResult> {
-		// Dynamic import to avoid loading puppeteer unless needed
 		const puppeteer = await import('puppeteer');
-		let browser;
-		
+		let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
+
+		const onAbort = () => { browser?.close().catch(() => {}); };
+		signal?.addEventListener('abort', onAbort, { once: true });
+
 		try {
 			browser = await puppeteer.launch({
-				headless: 'new',
+				headless: true,
 				args: [
 					'--no-sandbox',
 					'--disable-setuid-sandbox',
@@ -32,52 +34,45 @@ export class ReadWebpageTool extends ToolBase {
 			});
 
 			const page = await browser.newPage();
-			
-			// Set viewport
 			await page.setViewport({ width: 1280, height: 800 });
-			
-			// Navigate with timeout
-			await page.goto(url, { 
+
+			await page.goto(url, {
 				waitUntil: 'networkidle0',
 				timeout: timeout ?? 30000
 			});
 
-			// Wait for specific element if requested
 			if (wait_for) {
 				await page.waitForSelector(wait_for, { timeout: timeout ?? 30000 });
 			}
 
-			// Check for abort signal
-			if (signal?.aborted) {
-				await browser.close();
-				return { content: 'aborted', isError: true };
-			}
+			if (signal?.aborted) return { content: 'aborted', isError: true };
 
-			// Extract content
 			const content = await page.evaluate((sel) => {
 				const element = document.querySelector(sel || 'body');
 				if (!element) return '';
-				// Get text content but preserve some structure
 				return element.innerText || element.textContent || '';
 			}, selector);
 
 			await browser.close();
-			
+			browser = undefined;
+
 			if (!content || content.trim().length === 0) {
 				return { content: 'No content found at the specified selector', isError: false };
 			}
 
-			// Limit output size
 			const maxLength = 50000;
-			const truncated = content.length > maxLength 
+			const truncated = content.length > maxLength
 				? content.slice(0, maxLength) + '\n\n[Content truncated - ' + (content.length - maxLength) + ' characters remaining]'
 				: content;
 
 			return { content: truncated, isError: false };
 
 		} catch (e: any) {
-			if (browser) await browser.close();
+			if (browser) await browser.close().catch(() => {});
+			if (signal?.aborted) return { content: 'aborted', isError: true };
 			return { content: `Error reading webpage: ${e.message}`, isError: true };
+		} finally {
+			signal?.removeEventListener('abort', onAbort);
 		}
 	}
 }

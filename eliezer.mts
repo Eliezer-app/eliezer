@@ -353,7 +353,8 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool: ${tu.name}` });
 					continue;
 				}
-				log.info(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
+				log.info(`tool:${tu.name}`);
+				log.debug(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
 				await chat.send('default', JSON.stringify({ tool: tu.name, input: tu.input }), 'tool_call').catch((e: any) => log.error('chat send tool_call', { tool: tu.name, error: e.message }));
 				let { content, isError, signal: toolSignal, skipSecretRedaction } = await tool.call(tu.input, signal);
 				if (content.length > TOOL_OUTPUT_MAX_CHARS) {
@@ -363,7 +364,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					isError = true;
 				}
 				content = redactSecrets(content, skipSecretRedaction);
-				log.info(`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
+				log[isError ? 'error' : 'info'](`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
 				await chat.send('default', JSON.stringify({ tool: tu.name, result: content, isError }), 'tool_result').catch((e: any) => log.error('chat send tool_result', { tool: tu.name, error: e.message }));
 				results.push({ type: 'tool_result', tool_use_id: tu.id, content });
 				if (toolSignal === 'restart') { shouldBreak = 'restart'; break; }

@@ -372,9 +372,9 @@ export class WebSearchTool extends ToolBase {
 	private vettingLlm?: LLMBase;
 	constructor(provider: SearchProvider, vettingLlm?: LLMBase) { super(); this.provider = provider; this.vettingLlm = vettingLlm; }
 
-	async call({ query, limit }: Record<string, any>): Promise<ToolResult> {
+	async call({ query, limit }: Record<string, any>, signal?: AbortSignal): Promise<ToolResult> {
 		try {
-			const results = await this.provider.search(query, { limit: limit ?? 5 });
+			const results = await this.provider.search(query, { limit: limit ?? 5, signal });
 			if (!results.length) return { content: `No results for "${query}"`, isError: false };
 
 			if (this.vettingLlm) {

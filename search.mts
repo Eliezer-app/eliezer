@@ -7,7 +7,7 @@ export interface SearchResult {
 }
 
 export interface SearchProvider {
-	search(query: string, opts?: { limit?: number }): Promise<SearchResult[]>;
+	search(query: string, opts?: { limit?: number; signal?: AbortSignal }): Promise<SearchResult[]>;
 }
 
 const SNIPPET_MAX_CHARS = 200;
@@ -19,10 +19,12 @@ export class SearXNGProvider implements SearchProvider {
 		this.baseUrl = baseUrl.replace(/\/$/, '');
 	}
 
-	async search(query: string, opts?: { limit?: number }): Promise<SearchResult[]> {
+	async search(query: string, opts?: { limit?: number; signal?: AbortSignal }): Promise<SearchResult[]> {
 		const limit = opts?.limit ?? 5;
 		const url = `${this.baseUrl}/search?q=${encodeURIComponent(query)}&format=json&categories=general`;
-		const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+		const signals: AbortSignal[] = [AbortSignal.timeout(15_000)];
+		if (opts?.signal) signals.push(opts.signal);
+		const res = await fetch(url, { signal: AbortSignal.any(signals) });
 		if (!res.ok) throw new Error(`SearXNG error: ${res.status} ${res.statusText}`);
 		const ct = res.headers.get('content-type') || '';
 		if (!ct.includes('application/json')) throw new Error(`SearXNG returned non-JSON response (${ct})`);

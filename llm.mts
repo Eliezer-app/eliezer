@@ -72,6 +72,7 @@ export class AnthropicLLM extends LLMBase {
 		let res: Response;
 		const signals = [AbortSignal.timeout(this.timeoutMs)];
 		if (signal) signals.push(signal);
+		let data: any;
 		try {
 			res = await fetch(url, {
 				method: 'POST',
@@ -83,13 +84,12 @@ export class AnthropicLLM extends LLMBase {
 				body: JSON.stringify(body),
 				signal: AbortSignal.any(signals),
 			});
+			data = await res.json();
 		} catch (e: any) {
 			if (e.name === 'AbortError') throw e;
 			if (e.name === 'TimeoutError') throw new Error(`LLM timeout after ${this.timeoutMs / 1000}s: ${url}`);
-			throw new Error(`LLM unreachable at ${url}: ${e.message}`);
+			throw new Error(`LLM request failed (${url}): ${e.message}`);
 		}
-
-		const data = await res.json() as any;
 		if (!res.ok || data.error) throw new Error(`LLM error (${res.status}): ${data.error?.message ?? JSON.stringify(data)}`);
 		this.addTokens(data.usage?.input_tokens ?? 0, data.usage?.output_tokens ?? 0);
 		return { content: data.content ?? [], stop_reason: data.stop_reason };
@@ -125,6 +125,7 @@ export class OpenAILLM extends LLMBase {
 		let res: Response;
 		const signals = [AbortSignal.timeout(this.timeoutMs)];
 		if (signal) signals.push(signal);
+		let data: any;
 		try {
 			res = await fetch(url, {
 				method: 'POST',
@@ -132,13 +133,12 @@ export class OpenAILLM extends LLMBase {
 				body: JSON.stringify(body),
 				signal: AbortSignal.any(signals),
 			});
+			data = await res.json();
 		} catch (e: any) {
 			if (e.name === 'AbortError') throw e;
 			if (e.name === 'TimeoutError') throw new Error(`LLM timeout after ${this.timeoutMs / 1000}s: ${url}`);
-			throw new Error(`LLM unreachable at ${url}: ${e.message}`);
+			throw new Error(`LLM request failed (${url}): ${e.message}`);
 		}
-
-		const data = await res.json() as any;
 		if (!res.ok || data.error) throw new Error(`LLM error (${res.status}): ${data.error?.message ?? JSON.stringify(data)}`);
 		this.addTokens(data.usage?.prompt_tokens ?? 0, data.usage?.completion_tokens ?? 0);
 		return this.responseFromOpenAI(data.choices[0]);

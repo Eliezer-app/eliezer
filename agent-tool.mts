@@ -1,4 +1,5 @@
 import { ContentBlock, LLMBase, Message } from './llm.mts';
+import { Logger } from './log.mts';
 import { ToolBase, ToolResult } from './tools.mts';
 
 const MAX_TURNS = 100;
@@ -8,6 +9,10 @@ export abstract class AgentToolBase extends ToolBase {
 	protected abstract systemPrompt: string;
 	protected abstract agentTools: ToolBase[];
 	protected llm: LLMBase;
+	private _log?: Logger;
+	protected get log(): Logger {
+		return this._log ??= new Logger({ module: `SubAgent:${this.name}` });
+	}
 
 	constructor(llm: LLMBase) {
 		super();
@@ -47,7 +52,10 @@ export abstract class AgentToolBase extends ToolBase {
 					results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool: ${tu.name}` });
 					continue;
 				}
-				let { content: result } = await tool.call(tu.input, signal);
+				this.log.info(`tool:${tu.name}`);
+				this.log.debug(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
+				let { content: result, isError } = await tool.call(tu.input, signal);
+				this.log[isError ? 'error' : 'info'](`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
 				if (result.length > TOOL_OUTPUT_MAX_CHARS) {
 					result = result.slice(0, TOOL_OUTPUT_MAX_CHARS) + '\n... (truncated)';
 				}
