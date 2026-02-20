@@ -40,6 +40,7 @@ class AgentReadTool extends ToolBase {
 
 export class CodebaseExplorerTool extends AgentToolBase {
 	name = 'explore';
+	defaultTimeout = 600;
 	description = 'Explore a codebase. Provide a path and a question. Be specific about the aspect you are interested in, if any. The explorer can operate in two modes: brief (default — overview, key files, structure) and detailed (ask for "details" — exhaustive file paths, line numbers, function signatures, call chains). Examples: "how does auth work?", "what breaks if I rename X?", "why is test Y failing?", "what are the dependencies of module Z?". Use this to keep your context small.';
 	input_schema = {
 		type: 'object',

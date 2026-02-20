@@ -188,6 +188,7 @@ export function formatTaskYaml(tree: TreeNode[]): string {
 
 export class TaskTool extends ToolBase {
 	name = 'task';
+	defaultTimeout = 10;
 	description = 'Manage tasks and groups. Groups are containers (create_group, delete_group). Tasks are actionable work (create, update, complete, delete). list shows all. States: pending → active → done. Paused tasks don\'t trigger continuation. All pending/active tasks will keep notifying the agent to continue work until done or paused.';
 	input_schema = {
 		type: 'object',

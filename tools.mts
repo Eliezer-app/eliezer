@@ -48,6 +48,7 @@ export abstract class ToolBase {
 	abstract name: string;
 	abstract description: string;
 	abstract input_schema: Record<string, any>;
+	defaultTimeout = 30;
 	abstract call(input: Record<string, any>, signal?: AbortSignal): Promise<ToolResult>;
 }
 
@@ -73,26 +74,28 @@ export class ExecTool extends ToolBase {
 		required: ['command'],
 	};
 
-	async call({ command }: Record<string, any>, signal?: AbortSignal): Promise<ToolResult> {
+	async call({ command, timeout }: Record<string, any>, signal?: AbortSignal): Promise<ToolResult> {
 		if (/\|\s*(sudo\s+)?(ba|da|z|fi)?sh\b/.test(command)) {
 			return { content: 'Piping into a shell is not allowed. Download files with wget_tool and run them separately.', isError: true };
 		}
 		if (/\b(curl|wget)\b/.test(command)) {
 			return { content: 'curl/wget are not allowed. Use wget_tool instead — it\'s vetted by the security gate.', isError: true };
 		}
+		const timeoutMs = (timeout ?? this.defaultTimeout) * 1000;
 		return new Promise(resolve => {
-			const child = exec(command, { encoding: 'utf-8', timeout: 30_000 }, (err, stdout, stderr) => {
+			const child = exec(command, { encoding: 'utf-8', timeout: timeoutMs, killSignal: 'SIGKILL' }, (err, stdout, stderr) => {
 				if (signal?.aborted) resolve({ content: 'aborted', isError: true });
 				else if (err) resolve({ content: err.message, isError: true });
 				else resolve({ content: stdout || stderr, isError: false });
 			});
-			signal?.addEventListener('abort', () => child.kill(), { once: true });
+			signal?.addEventListener('abort', () => child.kill('SIGKILL'), { once: true });
 		});
 	}
 }
 
 export class ReadTool extends FileToolBase {
 	name = 'read';
+	defaultTimeout = 10;
 	description = 'Read a file. Returns numbered lines for reference only (cat -n). Use offset/limit for large files.';
 	input_schema = {
 		type: 'object',
@@ -122,6 +125,7 @@ export class ReadTool extends FileToolBase {
 
 export class WriteTool extends FileToolBase {
 	name = 'write';
+	defaultTimeout = 10;
 	description = 'Write content to a file (creates or overwrites)';
 	input_schema = {
 		type: 'object',
@@ -139,6 +143,7 @@ export class WriteTool extends FileToolBase {
 
 export class EditTool extends FileToolBase {
 	name = 'edit';
+	defaultTimeout = 10;
 	description = 'Edit a file by replacing a unique string. You must read the file first. Match against raw file content (not the line numbers from read output).';
 	input_schema = {
 		type: 'object',
@@ -167,6 +172,7 @@ export class EditTool extends FileToolBase {
 
 export class WgetTool extends ToolBase {
 	name = 'wget_tool';
+	defaultTimeout = 60;
 	description = 'Download a file from a URL to a temp path. Returns the path. curl/wget are not available — use this tool instead, downloads are security-vetted. For apps/widgets, move files to /opt/clawchat/apps/<my-app>/file. For public (user visible) media files, use /opt/eliezer/chat-public/.';
 	input_schema = {
 		type: 'object',
@@ -182,13 +188,11 @@ export class WgetTool extends ToolBase {
 	async call({ url }: Record<string, any>, signal?: AbortSignal): Promise<ToolResult> {
 		const MAX_SIZE = 100 * 1024 * 1024; // 100MB
 		try {
-			const signals = [AbortSignal.timeout(60_000)];
-			if (signal) signals.push(signal);
 			// HEAD request to check content-type and size before downloading
 			const head = await fetch(url, {
 				method: 'HEAD',
 				redirect: 'follow',
-				signal: AbortSignal.any(signals),
+				signal,
 			});
 			if (!head.ok) return { content: `HTTP ${head.status} ${head.statusText}`, isError: true };
 			const ct = head.headers.get('content-type') || '';
@@ -205,7 +209,7 @@ export class WgetTool extends ToolBase {
 			}
 			const res = await fetch(url, {
 				redirect: 'follow',
-				signal: AbortSignal.any(signals),
+				signal,
 			});
 			if (!res.ok) return { content: `HTTP ${res.status} ${res.statusText}`, isError: true };
 			if (!res.body) return { content: 'No response body', isError: true };
@@ -276,8 +280,10 @@ export class WgetTool extends ToolBase {
 	}
 }
 
+
 export class RestartTool extends ToolBase {
 	name = 'restart_self';
+	defaultTimeout = 5;
 	description = 'Restart the agent process (use after self-modifying code)';
 	input_schema = { type: 'object', properties: {} };
 
@@ -323,6 +329,7 @@ export class ScheduleTool extends ToolBase {
 		required: ['name'],
 	};
 
+	defaultTimeout = 10;
 	private cronManager: CronManager;
 	constructor(cronManager: CronManager) { super(); this.cronManager = cronManager; }
 

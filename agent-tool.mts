@@ -22,7 +22,16 @@ export abstract class AgentToolBase extends ToolBase {
 	async call(input: Record<string, any>, signal?: AbortSignal): Promise<ToolResult> {
 		const task = this.buildTask(input);
 		const tools = this.agentTools;
-		const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
+		const toolDefs = tools.map(t => ({
+			name: t.name, description: t.description,
+			input_schema: {
+				...t.input_schema,
+				properties: {
+					...t.input_schema.properties,
+					timeout: { type: 'number', description: `Timeout in seconds (default: ${t.defaultTimeout})` },
+				},
+			},
+		}));
 		const messages: Message[] = [{ role: 'user', content: task }];
 
 		for (let turn = 0; turn < MAX_TURNS; turn++) {
@@ -52,9 +61,20 @@ export abstract class AgentToolBase extends ToolBase {
 					results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool: ${tu.name}` });
 					continue;
 				}
+				const timeoutSec = tu.input.timeout ?? tool.defaultTimeout;
+				const toolAbort = AbortSignal.any([AbortSignal.timeout(timeoutSec * 1000), ...(signal ? [signal] : [])]);
 				this.log.info(`tool:${tu.name}`);
 				this.log.debug(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
-				let { content: result, isError } = await tool.call(tu.input, signal);
+				const t0 = Date.now();
+				let result: string, isError: boolean;
+				try {
+					({ content: result, isError } = await tool.call(tu.input, toolAbort));
+				} catch (e: any) {
+					if (signal?.aborted) return { content: 'aborted', isError: true };
+					result = e.message; isError = true;
+				}
+				if (signal?.aborted) return { content: 'aborted', isError: true };
+				if (toolAbort.aborted) { result = `Tool timed out after ${Math.round((Date.now() - t0) / 1000)}s`; isError = true; }
 				this.log[isError ? 'error' : 'info'](`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
 				if (result.length > TOOL_OUTPUT_MAX_CHARS) {
 					result = result.slice(0, TOOL_OUTPUT_MAX_CHARS) + '\n... (truncated)';

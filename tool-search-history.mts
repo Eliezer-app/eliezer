@@ -143,6 +143,7 @@ function formatResults(results: SearchResult[]): string {
 
 export class SearchHistoryTool extends ToolBase {
 	name = 'search_message_history';
+	defaultTimeout = 10;
 	description = `Search past conversation history. All parts must match (AND). Searches raw messages and compacted summaries.
 
 Optional: context (N messages before/after), since/until (unix timestamps), role filter.`;

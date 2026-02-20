@@ -76,6 +76,7 @@ function truncate(output: string): string {
 
 export class FileSearchTool extends ToolBase {
 	name = 'file_search';
+	defaultTimeout = 30;
 	description = 'Search files. command: ls, grep, find, df, wc, tree. path = working directory for all commands. tree shows project structure (auto-excludes: node_modules, .git, .pnpm-store, dist, build, coverage, .cache, __pycache__, .venv; args = additional dirs to exclude). Others take standard args. 5s timeout, output capped.';
 	input_schema = {
 		type: 'object',

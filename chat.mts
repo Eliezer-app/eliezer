@@ -49,6 +49,7 @@ function findMessageByMatch(db: Database.Database, match: string): { id: string 
 
 export class ChatTool extends ToolBase {
 	name = 'chat';
+	defaultTimeout = 15;
 	description: string;
 	input_schema = {
 		type: 'object',

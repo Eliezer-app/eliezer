@@ -2,6 +2,7 @@ import { ToolBase, ToolResult } from './tools.mts';
 
 export class ReadWebpageTool extends ToolBase {
 	name = 'read_webpage';
+	defaultTimeout = 60;
 	description = 'Read a webpage using headless Chrome (Puppeteer). Returns the rendered text content. Use for JavaScript-heavy sites that wget_tool cannot handle. Slower but more accurate rendering.';
 	input_schema = {
 		type: 'object',

@@ -6,7 +6,7 @@ import { createLLM, ContentBlock } from './llm.mts';
 import { EventQueue, AgentEvent } from './queue.mts';
 import { Memory } from './memory.mts';
 import { startServer } from './server.mts';
-import { ExecTool, ReadTool, WriteTool, EditTool, WgetTool, RestartTool, ScheduleTool, WebSearchTool, parseDuration } from './tools.mts';
+import { ExecTool, ReadTool, WriteTool, EditTool, WgetTool, RestartTool, ScheduleTool, WebSearchTool, parseDuration, ToolResult } from './tools.mts';
 import { SearchHistoryTool } from './tool-search-history.mts';
 import { ReadWebpageTool } from './tool-read-webpage.mts';
 import { SearXNGProvider } from './search.mts';
@@ -91,7 +91,16 @@ const tools = [
 	new TaskTool(taskManager),
 	new ReadWebpageTool(),
 ];
-const toolDefs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
+const toolDefs = tools.map(t => ({
+	name: t.name, description: t.description,
+	input_schema: {
+		...t.input_schema,
+		properties: {
+			...t.input_schema.properties,
+			timeout: { type: 'number', description: `Timeout in seconds (default: ${t.defaultTimeout})` },
+		},
+	},
+}));
 
 function getSystem(): string {
 	return buildSystemPrompt({ promptsDir: PROMPTS_DIR, cronManager, taskManager, memory });
@@ -353,10 +362,21 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool: ${tu.name}` });
 					continue;
 				}
+				const timeoutSec = tu.input.timeout ?? tool.defaultTimeout;
+				const toolAbort = AbortSignal.any([AbortSignal.timeout(timeoutSec * 1000), signal]);
 				log.info(`tool:${tu.name}`);
 				log.debug(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
 				await chat.send('default', JSON.stringify({ tool: tu.name, input: tu.input }), 'tool_call').catch((e: any) => log.error('chat send tool_call', { tool: tu.name, error: e.message }));
-				let { content, isError, signal: toolSignal, skipSecretRedaction } = await tool.call(tu.input, signal);
+				const t0 = Date.now();
+				let content: string, isError: boolean, toolSignal: ToolResult['signal'], skipSecretRedaction: boolean | undefined;
+				try {
+					({ content, isError, signal: toolSignal, skipSecretRedaction } = await tool.call(tu.input, toolAbort));
+				} catch (e: any) {
+					if (signal.aborted) { shouldBreak = 'abort'; break; }
+					content = e.message; isError = true;
+				}
+				if (signal.aborted) { shouldBreak = 'abort'; break; }
+				if (toolAbort.aborted) { content = `Tool timed out after ${Math.round((Date.now() - t0) / 1000)}s`; isError = true; }
 				if (content.length > TOOL_OUTPUT_MAX_CHARS) {
 					const preview = content.slice(0, TOOL_OUTPUT_PREVIEW_CHARS);
 					const size = content.length >= 1000 ? Math.round(content.length / 1000) + 'k' : String(content.length);
