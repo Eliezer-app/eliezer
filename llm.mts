@@ -47,6 +47,26 @@ export function createLLM(opts: { provider: string; apiKey: string; model: strin
 		: new OpenAILLM(opts);
 }
 
+/** Strip reasoning blocks and fix tool IDs for Anthropic's ^[a-zA-Z0-9_-]+$ pattern */
+function sanitizeForAnthropic(messages: Message[]): Message[] {
+	return messages.map(m => {
+		if (typeof m.content === 'string') return m;
+		const filtered = m.content.map(b => {
+			if (b.type === 'reasoning') return null;
+			if (b.type === 'tool_use') {
+				const sanitized = b.id.replace(/[^a-zA-Z0-9_-]/g, '_');
+				return sanitized !== b.id ? { ...b, id: sanitized } : b;
+			}
+			if (b.type === 'tool_result') {
+				const sanitized = b.tool_use_id.replace(/[^a-zA-Z0-9_-]/g, '_');
+				return sanitized !== b.tool_use_id ? { ...b, tool_use_id: sanitized } : b;
+			}
+			return b;
+		}).filter(Boolean) as ContentBlock[];
+		return filtered.length === m.content.length && filtered.every((b, i) => b === m.content[i]) ? m : { ...m, content: filtered };
+	});
+}
+
 export class AnthropicLLM extends LLMBase {
 	private apiKey: string;
 	private model: string;
@@ -64,7 +84,7 @@ export class AnthropicLLM extends LLMBase {
 			model: this.model,
 			max_tokens: this.maxTokens,
 			system,
-			messages,
+			messages: sanitizeForAnthropic(messages),
 		};
 		if (tools.length) body.tools = tools;
 

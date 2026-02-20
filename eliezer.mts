@@ -321,7 +321,14 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 			}
 			setAgentState(STATE_INFERENCE);
 			const ctx = memory.getContext();
-			const response = await llm.call(ctx, getSystem(), toolDefs, signal);
+			let response;
+			try {
+				response = await llm.call(ctx, getSystem(), toolDefs, signal);
+			} catch (e: any) {
+				if (e.name === 'AbortError') throw e;
+				log.error('llm call failed', { error: e.message });
+				throw e;
+			}
 
 			// Keep text, tool_use, and reasoning blocks. Reasoning is needed for providers
 			// that require it on history replay (e.g. Kimi).
@@ -384,7 +391,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					isError = true;
 				}
 				content = redactSecrets(content, skipSecretRedaction);
-				log[isError ? 'error' : 'info'](`tool:${tu.name}`, { result: isError ? 'error' : 'ok' });
+				log[isError ? 'error' : 'info'](`tool:${tu.name}`, isError ? { result: content, input: JSON.stringify(tu.input).slice(0, 500) } : { result: 'ok' });
 				await chat.send('default', JSON.stringify({ tool: tu.name, result: content, isError }), 'tool_result').catch((e: any) => log.error('chat send tool_result', { tool: tu.name, error: e.message }));
 				results.push({ type: 'tool_result', tool_use_id: tu.id, content });
 				if (toolSignal === 'restart') { shouldBreak = 'restart'; break; }
