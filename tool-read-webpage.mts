@@ -1,4 +1,7 @@
+import { resolve } from 'path';
 import { ToolBase, ToolResult } from './tools.mts';
+
+const useSystemChrome = !!process.env.PUPPETEER_EXECUTABLE_PATH;
 
 export class ReadWebpageTool extends ToolBase {
 	name = 'read_webpage';
@@ -23,16 +26,22 @@ export class ReadWebpageTool extends ToolBase {
 		signal?.addEventListener('abort', onAbort, { once: true });
 
 		try {
-			browser = await puppeteer.launch({
-				headless: true,
-				args: [
-					'--no-sandbox',
-					'--disable-setuid-sandbox',
-					'--disable-dev-shm-usage',
-					'--disable-gpu',
-					'--single-process'
-				]
-			});
+			const launchOpts: any = useSystemChrome
+				? {
+					headless: true,
+					args: ['--user-data-dir=' + resolve('state/chrome-profile')],
+				}
+				: {
+					headless: true,
+					args: [
+						'--no-sandbox',
+						'--disable-setuid-sandbox',
+						'--disable-dev-shm-usage',
+						'--disable-gpu',
+						'--single-process',
+					],
+				};
+			browser = await puppeteer.launch(launchOpts);
 
 			const page = await browser.newPage();
 			await page.setViewport({ width: 1280, height: 800 });
