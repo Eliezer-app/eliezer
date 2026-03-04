@@ -1,7 +1,6 @@
 import Database from 'better-sqlite3';
 
 export interface ChatMessagePayload {
-	conversationId: string;
 	messageId: string;
 	content: string;
 	attachment?: { filename: string; mimetype: string; size: number };

@@ -268,10 +268,10 @@ while (true) {
 		if (e.name === 'AbortError') {
 			log.info('event aborted by user', { source: event.source, type: event.type });
 			memory.add('user', '[user stopped agent execution]');
-			await chat.send('default', '(stopped)').catch(() => {});
+			await chat.send('(stopped)').catch(() => {});
 		} else {
 			log.error('event failed', { source: event.source, type: event.type, error: e.message });
-			try { await chat.send('default', `Error: ${e.message}`); } catch (ce: any) {
+			try { await chat.send(`Error: ${e.message}`); } catch (ce: any) {
 				log.error('chat send failed', { error: ce.message });
 			}
 		}
@@ -292,7 +292,10 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 		memory.add('user', `[cron:${payload.name}] ${payload.prompt}`);
 	} else if (event.type === 'continue_work' || event.type === 'restart') {
 		memory.add('user', payload);
-		await chat.send('default', payload, 'thought').catch((e: any) => log.error('chat send event', { error: e.message }));
+		await chat.send(payload, 'thought').catch((e: any) => log.error('chat send event', { error: e.message }));
+	} else if (event.type === 'user_message') {
+		const prefix = payload.media === 'voice' ? 'Message/voice' : 'Message';
+		memory.add('user', `${prefix}: ${payload.content}`, chatMessageId);
 	} else {
 		memory.add('user', `Event: ${event.source}:${event.type}\n${JSON.stringify(event.payload)}`, chatMessageId);
 	}
@@ -303,7 +306,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 			if (signal.aborted) {
 				log.info('event processing stopped by user');
 				memory.add('user', '[user stopped agent execution]');
-				await chat.send('default', '(stopped)').catch(() => {});
+				await chat.send('(stopped)').catch(() => {});
 				break;
 			}
 			const cp = compactor.prepare();
@@ -337,7 +340,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 				if (block.type === 'text') log.info('llm', { text: block.text });
 				if (block.type === 'reasoning') {
 					const text = (block as any).text || (block as any).content;
-					if (text) await chat.send('default', text, 'thought').catch((e: any) => log.error('chat send thought', { error: e.message }));
+					if (text) await chat.send(text, 'thought').catch((e: any) => log.error('chat send thought', { error: e.message }));
 				}
 			}
 			const toolUses = response.content.filter(b => b.type === 'tool_use') as
@@ -349,7 +352,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 					.join('\n');
 				let sentMessageId: string | undefined;
 				if (text && text.trim() !== '[no response]') {
-					const res = await chat.send('default', text);
+					const res = await chat.send(text);
 					sentMessageId = res?.messageId;
 				}
 				memory.add('assistant', content, sentMessageId);
@@ -373,7 +376,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 				const toolAbort = AbortSignal.any([AbortSignal.timeout(timeoutSec * 1000), signal]);
 				log.info(`tool:${tu.name}`);
 				log.debug(`tool:${tu.name}`, { input: JSON.stringify(tu.input) });
-				await chat.send('default', JSON.stringify({ tool: tu.name, input: tu.input }), 'tool_call').catch((e: any) => log.error('chat send tool_call', { tool: tu.name, error: e.message }));
+				await chat.send(JSON.stringify({ tool: tu.name, input: tu.input }), 'tool_call').catch((e: any) => log.error('chat send tool_call', { tool: tu.name, error: e.message }));
 				const t0 = Date.now();
 				let content: string, isError: boolean, toolSignal: ToolResult['signal'], skipSecretRedaction: boolean | undefined;
 				try {
@@ -392,7 +395,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 				}
 				content = redactSecrets(content, skipSecretRedaction);
 				log[isError ? 'error' : 'info'](`tool:${tu.name}`, isError ? { result: content, input: JSON.stringify(tu.input).slice(0, 500) } : { result: 'ok' });
-				await chat.send('default', JSON.stringify({ tool: tu.name, result: content, isError }), 'tool_result').catch((e: any) => log.error('chat send tool_result', { tool: tu.name, error: e.message }));
+				await chat.send(JSON.stringify({ tool: tu.name, result: content, isError }), 'tool_result').catch((e: any) => log.error('chat send tool_result', { tool: tu.name, error: e.message }));
 				results.push({ type: 'tool_result', tool_use_id: tu.id, content });
 				if (toolSignal === 'restart') { shouldBreak = 'restart'; break; }
 			}
@@ -401,7 +404,7 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 			if (shouldBreak) {
 				if (shouldBreak === 'abort') {
 					memory.add('user', '[user stopped agent execution]');
-					await chat.send('default', '(stopped)').catch(() => {});
+					await chat.send('(stopped)').catch(() => {});
 				}
 				if (shouldBreak === 'restart') return 'restart';
 				break;

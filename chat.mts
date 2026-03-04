@@ -10,8 +10,8 @@ export class ChatClient {
 		this.baseUrl = baseUrl.replace(/\/$/, '');
 	}
 
-	async send(conversationId: string, content: string, type?: string, attachment?: { filename: string }, signal?: AbortSignal): Promise<any> {
-		return this.request('POST', '/send', { conversationId, content, ...(type ? { type } : {}), ...(attachment ? { attachment } : {}) }, signal);
+	async send(content: string, type?: string, attachment?: { filename: string }, signal?: AbortSignal): Promise<any> {
+		return this.request('POST', '/agent/send', { role: 'agent', content, ...(type ? { type } : {}), ...(attachment ? { attachment } : {}) }, signal);
 	}
 
 	async updateMessage(messageId: string, content: string, signal?: AbortSignal): Promise<any> {
@@ -55,7 +55,6 @@ export class ChatTool extends ToolBase {
 		type: 'object',
 		properties: {
 			action: { type: 'string', enum: ['send', 'update', 'delete'] },
-			conversationId: { type: 'string', description: 'Required for send' },
 			match: { type: 'string', description: 'Substring to find the message. Required for update/delete' },
 			content: { type: 'string', description: 'Required for send/update' },
 			attachment: { type: 'object', properties: { filename: { type: 'string', description: 'Filename (not path) of a file already written to the chat-public directory' } }, required: ['filename'] },
@@ -87,7 +86,7 @@ export class ChatTool extends ToolBase {
 						if (!existsSync(full))
 							return { content: `attachment not found: ${input.attachment.filename}`, isError: true };
 					}
-					result = await this.client.send(input.conversationId ?? 'default', input.content, undefined, input.attachment, signal);
+					result = await this.client.send(input.content, undefined, input.attachment, signal);
 					break;
 				case 'update': {
 					const found = findMessageByMatch(this.db, input.match);

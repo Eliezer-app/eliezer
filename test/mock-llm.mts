@@ -89,7 +89,7 @@ function mockArgsFor(name: string): Record<string, unknown> {
 		case 'exec': return { command: 'echo hello' };
 		case 'read': return { path: '/dev/null' };
 		case 'write': return { path: '/tmp/mock-test', content: 'test' };
-		case 'chat': return { action: 'send', conversationId: 'default', content: 'Hello from agent' };
+		case 'chat': return { action: 'send', content: 'Hello from agent' };
 		default: return {};
 	}
 }

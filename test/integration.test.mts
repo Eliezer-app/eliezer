@@ -66,7 +66,7 @@ describe('agent integration', () => {
 
 		// Text response should be auto-sent to chat (filter out state-change calls)
 		const chatCalls = await waitForCalls(MOCK_CHAT, 1);
-		const sendCalls = chatCalls.filter((c: any) => c.url === '/send');
+		const sendCalls = chatCalls.filter((c: any) => c.url === '/agent/send');
 		expect(sendCalls.length).toBeGreaterThanOrEqual(1);
 		expect(sendCalls[0].method).toBe('POST');
 		expect(sendCalls[0].body.content).toBeDefined();
@@ -88,18 +88,17 @@ describe('agent integration', () => {
 		await fetch(`${MOCK_LLM}/next-tool`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ name: 'chat', arguments: { action: 'send', conversationId: 'default', content: 'Hello from agent' } }),
+			body: JSON.stringify({ name: 'chat', arguments: { action: 'send', content: 'Hello from agent' } }),
 		});
 
 		await postEvent('test', 'user_message', { content: 'Say hello' });
 
 		// Agent should call mock chat server (filter out state-change calls)
 		const chatCalls = await waitForCalls(MOCK_CHAT, 1);
-		const sendCalls = chatCalls.filter((c: any) => c.url === '/send' && !c.body.type);
+		const sendCalls = chatCalls.filter((c: any) => c.url === '/agent/send' && !c.body.type);
 		expect(sendCalls.length).toBeGreaterThanOrEqual(1);
 		expect(sendCalls[0].method).toBe('POST');
 		expect(sendCalls[0].body.content).toBe('Hello from agent');
-		expect(sendCalls[0].body.conversationId).toBe('default');
 	}, 15_000);
 
 	it('memory: second event includes context from first', async () => {
