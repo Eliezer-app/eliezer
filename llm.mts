@@ -120,6 +120,8 @@ export class OpenAILLM extends LLMBase {
 	private apiKey: string;
 	private model: string;
 	private baseUrl: string;
+	/** Raw tool_call objects keyed by id — used to echo provider-specific fields during tool loops */
+	private rawToolCalls = new Map<string, any>();
 
 	constructor(opts: { apiKey: string; model: string; baseUrl: string; tokenLimit?: number; timeoutMs?: number; maxTokens?: number }) {
 		super(opts.tokenLimit, opts.timeoutMs, opts.maxTokens);
@@ -131,7 +133,7 @@ export class OpenAILLM extends LLMBase {
 	async call(messages: Message[], system: string, tools: ToolDef[] = [], signal?: AbortSignal, jsonMode?: boolean): Promise<LLMResponse> {
 		const body: any = {
 			model: this.model,
-			messages: this.messagesToOpenAI(messages, system),
+			messages: this.formatMessages(messages, system),
 		};
 		if (jsonMode) body.response_format = { type: 'json_object' };
 		if (tools.length) {
@@ -161,10 +163,10 @@ export class OpenAILLM extends LLMBase {
 		}
 		if (!res.ok || data.error) throw new Error(`LLM error (${res.status}): ${data.error?.message ?? JSON.stringify(data)}`);
 		this.addTokens(data.usage?.prompt_tokens ?? 0, data.usage?.completion_tokens ?? 0);
-		return this.responseFromOpenAI(data.choices[0]);
+		return this.parseLlmResponse(data.choices[0]);
 	}
 
-	private messagesToOpenAI(messages: Message[], system: string): any[] {
+	private formatMessages(messages: Message[], system: string): any[] {
 		const out: any[] = [{ role: 'system', content: system }];
 
 		for (const msg of messages) {
@@ -184,7 +186,7 @@ export class OpenAILLM extends LLMBase {
 				const texts = msg.content.filter(b => b.type === 'text').map(b => (b as any).text);
 				const calls = msg.content.filter(b => b.type === 'tool_use').map(b => {
 					const tu = b as Extract<ContentBlock, { type: 'tool_use' }>;
-					return { id: tu.id, type: 'function', function: { name: tu.name, arguments: JSON.stringify(tu.input) } };
+					return this.rawToolCalls.get(tu.id) ?? { id: tu.id, type: 'function', function: { name: tu.name, arguments: JSON.stringify(tu.input) } };
 				});
 				const reasoning = msg.content.filter(b => b.type === 'reasoning').map(b => (b as any).content).join('');
 				const oai: any = { role: 'assistant' };
@@ -198,13 +200,14 @@ export class OpenAILLM extends LLMBase {
 		return out;
 	}
 
-	private responseFromOpenAI(choice: any): LLMResponse {
+	private parseLlmResponse(choice: any): LLMResponse {
 		const content: ContentBlock[] = [];
 		const msg = choice.message;
 		if (msg.reasoning_content) content.push({ type: 'reasoning', content: msg.reasoning_content });
 		if (msg.content) content.push({ type: 'text', text: msg.content });
 		if (msg.tool_calls) {
 			for (const tc of msg.tool_calls) {
+				this.rawToolCalls.set(tc.id, tc);
 				content.push({
 					type: 'tool_use',
 					id: tc.id,

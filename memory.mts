@@ -93,7 +93,6 @@ export function groupRows(rows: MessageRow[], gapSeconds: number): Group[] {
 export class Memory {
 	private db: Database.Database;
 	private timezone: string;
-
 	constructor(db: Database.Database, timezone: string) {
 		this.timezone = timezone;
 		this.db = db;
