@@ -109,6 +109,8 @@ export class ReadTool extends FileToolBase {
 
 	async call({ path, offset, limit }: Record<string, any>): Promise<ToolResult> {
 		return safe(() => {
+			const size = statSync(path).size;
+			if (size > 10 * 1024 * 1024) throw new Error(`File is ${Math.round(size / 1024 / 1024)}MB. Max readable size is 10MB.`);
 			const content = readFileSync(path, 'utf-8');
 			const lines = content.split('\n');
 			const start = Math.max(0, (offset ?? 1) - 1);

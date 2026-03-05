@@ -301,8 +301,12 @@ async function handleEvent(event: AgentEvent, signal: AbortSignal) {
 	}
 
 
+	const MAX_TURNS = 50;
+	let turns = 0;
 	try {
 		while (true) {
+			if (++turns > MAX_TURNS) throw new Error(`Agent turn limit exceeded (${MAX_TURNS})`);
+
 			if (signal.aborted) {
 				log.info('event processing stopped by user');
 				memory.add('user', '[user stopped agent execution]');
